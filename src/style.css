@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+/* ─── Colori brand Amia ─── */
+
+@theme {
+  --color-amia-50: #f7f7f8;
+  --color-amia-100: #efeff1;
+  --color-amia-200: #d8d8dd;
+  --color-amia-300: #b4b4bd;
+  --color-amia-400: #8e8e9a;
+  --color-amia-500: #6e6e7a;
+  --color-amia-600: #585864;
+  --color-amia-700: #484852;
+  --color-amia-800: #3d3d45;
+  --color-amia-900: #27272c;
+  --color-amia-950: #111114;
+
+  --color-accent: #0071e3;
+  --color-accent-hover: #005bb5;
+  --color-accent-light: #e8f2fc;
+
+  --font-sans: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
+
+  --shadow-card: 0 2px 8px -2px rgba(0, 0, 0, 0.06),
+    0 1px 3px -1px rgba(0, 0, 0, 0.04);
+  --shadow-elevated: 0 8px 24px -4px rgba(0, 0, 0, 0.08),
+    0 4px 8px -4px rgba(0, 0, 0, 0.04);
+}
+
+/* ─── Base ─── */
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  background: var(--color-amia-50);
+  color: var(--color-amia-950);
+}
+
+/* ─── Scrollbar minimale ─── */
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-amia-200); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-amia-300); }
+
+/* ─── Transizione pagina ─── */
+
+.page-enter { opacity: 0; transform: translateY(8px); }
+.page-active { opacity: 1; transform: translateY(0); transition: opacity 0.25s ease, transform 0.25s ease; }
+
+/* ─── Link sidebar ─── */
+
+.nav-link { transition: all 0.15s ease; }
+.nav-link:hover { background: rgba(0, 0, 0, 0.03); }
+.nav-link.active { background: var(--color-accent-light); color: var(--color-accent); }
+.nav-link.active svg { color: var(--color-accent); }
+
+/* ─── Focus input ─── */
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.1);
+}
+
+/* ─── Toast notification ─── */
+
+.toast-slide-in {
+  animation: toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards;
+}
+@keyframes toastIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes toastOut {
+  to { opacity: 0; transform: translateX(20px); }
+}
+
+/* ─── Loading spinner ─── */
+
+.spinner {
+  border: 2px solid var(--color-amia-100);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  animation: spin 0.6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
