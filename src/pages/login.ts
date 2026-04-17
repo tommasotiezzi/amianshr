@@ -1,16 +1,70 @@
 /**
- * Pagina di login.
- * Form email + password, con loading spinner e gestione errori.
+ * Login page — PageFactory.
+ *
+ * This page does NOT use the sidebar wrapper. In main.ts:
+ *   router.on('/login', createLoginPage, () => ({ root, ... }) => ...);
+ *   // or more simply, register without a wrapper — but the default wrapper
+ *   // is createSidebarWrapper. To skip it, pass a no-op wrapper that just
+ *   // returns the root element.
+ *
+ * The login page takes over the entire root container. When the user submits
+ * valid credentials we navigate to /dashboard and the router swaps to the
+ * sidebar-wrapped layout automatically.
  */
 
-import { Router } from '../router';
-import { login } from '../lib/auth';
+import type { PageFactory } from '../lib/page';
+import { login, isAuthenticated } from '../lib/auth';
 
-export function renderLoginPage(root: HTMLElement, router: Router) {
-  root.innerHTML = `
+export const createLoginPage: PageFactory = (ctx) => {
+  return {
+    async mount() {
+      // If already logged in, bounce to dashboard
+      if (isAuthenticated()) {
+        ctx.router.navigate('/dashboard');
+        return;
+      }
+
+      ctx.container.innerHTML = render();
+
+      const form = ctx.$<HTMLFormElement>('#login-form');
+      const emailInput = ctx.$<HTMLInputElement>('#login-email');
+      const passwordInput = ctx.$<HTMLInputElement>('#login-password');
+      const btn = ctx.$<HTMLButtonElement>('#login-btn');
+      const btnText = ctx.$('#login-btn-text');
+      const spinner = ctx.$('#login-spinner');
+      const errorBox = ctx.$('#login-error');
+
+      ctx.on(form, 'submit', async (e) => {
+        e.preventDefault();
+        if (!emailInput || !passwordInput || !btn || !btnText || !spinner || !errorBox) return;
+
+        btn.disabled = true;
+        btnText.textContent = 'Accesso in corso...';
+        spinner.classList.remove('hidden');
+        errorBox.classList.add('hidden');
+
+        try {
+          await login(emailInput.value, passwordInput.value);
+          if (ctx.signal.aborted) return;
+          ctx.router.navigate('/dashboard');
+        } catch {
+          if (ctx.signal.aborted) return;
+          errorBox.textContent = 'Credenziali non valide. Riprova.';
+          errorBox.classList.remove('hidden');
+          btn.disabled = false;
+          btnText.textContent = 'Accedi';
+          spinner.classList.add('hidden');
+        }
+      });
+    },
+  };
+};
+
+function render(): string {
+  return `
     <div class="min-h-screen bg-white flex">
 
-      <!-- Colonna sinistra: form -->
+      <!-- Left: form -->
       <div class="flex-1 flex items-center justify-center px-6">
         <div class="w-full max-w-sm">
 
@@ -80,7 +134,7 @@ export function renderLoginPage(root: HTMLElement, router: Router) {
         </div>
       </div>
 
-      <!-- Colonna destra: brand -->
+      <!-- Right: brand -->
       <div class="hidden lg:flex flex-1 items-center justify-center bg-amia-50 border-l border-amia-100">
         <div class="text-center max-w-xs">
           <div class="w-20 h-20 bg-amia-950 rounded-3xl flex items-center justify-center mx-auto mb-8">
@@ -96,34 +150,4 @@ export function renderLoginPage(root: HTMLElement, router: Router) {
       </div>
     </div>
   `;
-
-  // ── Gestione submit form ──
-
-  const form = document.getElementById('login-form') as HTMLFormElement;
-  const emailInput = document.getElementById('login-email') as HTMLInputElement;
-  const passwordInput = document.getElementById('login-password') as HTMLInputElement;
-  const btn = document.getElementById('login-btn') as HTMLButtonElement;
-  const btnText = document.getElementById('login-btn-text')!;
-  const spinner = document.getElementById('login-spinner')!;
-  const errorBox = document.getElementById('login-error')!;
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-
-    btn.disabled = true;
-    btnText.textContent = 'Accesso in corso...';
-    spinner.classList.remove('hidden');
-    errorBox.classList.add('hidden');
-
-    try {
-      await login(emailInput.value, passwordInput.value);
-      router.navigate('/dashboard');
-    } catch {
-      errorBox.textContent = 'Credenziali non valide. Riprova.';
-      errorBox.classList.remove('hidden');
-      btn.disabled = false;
-      btnText.textContent = 'Accedi';
-      spinner.classList.add('hidden');
-    }
-  });
 }

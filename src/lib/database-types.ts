@@ -1,7 +1,7 @@
 /**
- * Tipi TypeScript del database Supabase — v2
+ * Tipi TypeScript del database Supabase — v3
  *
- * Allineato a supabase-schema-v2.sql
+ * Allineato allo schema con axis scoring + ICP + answer_key lockdown.
  * Auto-generabili con: npx supabase gen types typescript --project-id YOUR_ID
  */
 
@@ -9,10 +9,53 @@
 
 export type UserRole = 'admin' | 'candidate';
 export type PositionStatus = 'draft' | 'published' | 'closed' | 'archived';
-export type ContractType = 'full-time' | 'part-time' | 'freelance' | 'stage';
+export type ContractType = 'full_time' | 'part_time' | 'freelance' | 'internship';
 export type ApplicationStatus = 'applied' | 'interview' | 'rejected' | 'hired';
 export type QuizType = 'logic' | 'skills' | 'attitudinal';
-export type QuestionType = 'multiple_choice' | 'open_text' | 'file_upload';
+export type QuestionType = 'multiple_choice' | 'ranking' | 'open_text' | 'file_upload';
+
+export type AxisType =
+  | 'action_bias'
+  | 'ownership'
+  | 'ambiguity_tolerance'
+  | 'data_driven'
+  | 'autonomy'
+  | 'feedback_receptivity'
+  | 'learning_loop'
+  | 'perfection_as_means'
+  | 'people_first'
+  | 'constructive_restlessness'
+  | 'innovation_renewal';
+
+/** All 11 axes in canonical order — for iterating in UI (e.g. ICP sliders). */
+export const AXES: AxisType[] = [
+  'action_bias',
+  'ownership',
+  'ambiguity_tolerance',
+  'data_driven',
+  'autonomy',
+  'feedback_receptivity',
+  'learning_loop',
+  'perfection_as_means',
+  'people_first',
+  'constructive_restlessness',
+  'innovation_renewal',
+];
+
+/** UI labels for axes (Italian, to be swapped to English when frontend is redone). */
+export const AXIS_LABELS: Record<AxisType, string> = {
+  action_bias:               'Bias all\'azione',
+  ownership:                 'Ownership',
+  ambiguity_tolerance:       'Tolleranza ambiguità',
+  data_driven:               'Data-driven',
+  autonomy:                  'Autonomia operativa',
+  feedback_receptivity:      'Feedback receptivity',
+  learning_loop:             'Learning loop',
+  perfection_as_means:       'Perfezione come mezzo',
+  people_first:              'Le persone al centro',
+  constructive_restlessness: 'Inquietudine costruttiva',
+  innovation_renewal:        'Innovazione e rinnovo',
+};
 
 // ── Row types ──
 
@@ -42,9 +85,23 @@ export interface QuizQuestion {
   question_text: string;
   sort_order: number;
   points: number;
+  axis: AxisType | null;
   config: QuestionConfig;
-  ideal_answer: string | null;
+  /** Present only when admin reads. Candidates get this stripped by RPC. */
+  answer_key: AnswerKey;
   created_at: string;
+}
+
+/** Shape of a question when fetched for a candidate (via get_quiz_for_candidate RPC). */
+export interface QuizQuestionForCandidate {
+  id: string;
+  question_type: QuestionType;
+  question_text: string;
+  sort_order: number;
+  points: number;
+  axis: AxisType | null;
+  config: QuestionConfig;
+  // answer_key is deliberately absent
 }
 
 export interface Position {
@@ -60,6 +117,7 @@ export interface Position {
   pre_quiz_id: string | null;
   post_quiz_id: string | null;
   att_quiz_id: string | null;
+  icp_config: IcpConfig;
   slug: string;
   published_at: string | null;
   created_at: string;
@@ -86,7 +144,7 @@ export interface Application {
   portfolio_path: string | null;
   cover_letter: string | null;
 
-  // Pre-Quiz (logica, 25 min)
+  // Pre-Quiz (logic, e.g. 25 min)
   pre_quiz_score: number | null;
   pre_quiz_max_score: number | null;
   pre_quiz_responses: QuizResponse[] | null;
@@ -94,7 +152,7 @@ export interface Application {
   pre_quiz_completed_at: string | null;
   pre_quiz_over_time: boolean;
 
-  // Post-Quiz (skills, 35 min)
+  // Post-Quiz (skills, e.g. 35 min)
   post_quiz_score: number | null;
   post_quiz_max_score: number | null;
   post_quiz_responses: QuizResponse[] | null;
@@ -102,9 +160,13 @@ export interface Application {
   post_quiz_completed_at: string | null;
   post_quiz_over_time: boolean;
 
-  // Attitudinale (opzionale, no timer)
+  // Attitudinal (no timer)
   att_quiz_responses: QuizResponse[] | null;
   att_quiz_completed_at: string | null;
+
+  // Axis scoring (filled after attitudinal is submitted)
+  axis_scores: AxisScores | null;
+  composite_score: number | null;
 
   created_at: string;
   updated_at: string;
@@ -136,21 +198,78 @@ export interface EmailTemplate {
   updated_at: string;
 }
 
-// ── Tipi nested ──
+// ── Nested / JSONB types ──
 
+/**
+ * Candidate response stored in applications.*_quiz_responses.
+ * For multiple_choice: answer is number[] (selected indices).
+ * For ranking: answer is string[] (ordered option IDs, index 0 = most important / rank 1).
+ * For open_text: answer is string.
+ */
 export interface QuizResponse {
   question_id: string;
-  answer: string | string[];
-  is_correct?: boolean;
+  answer: string | string[] | number[] | null;
+  is_correct?: boolean | null;
   points_earned?: number;
 }
 
+/**
+ * Candidate-visible portion of a question.
+ * No correct answers here — those live in AnswerKey.
+ */
 export interface QuestionConfig {
+  // multiple_choice
   options?: string[];
-  correct?: number[];           // indici delle risposte corrette
   allow_multiple?: boolean;
-  allowed_types?: string[];     // per file_upload
+
+  // ranking (attitudinal & logic case studies)
+  /** Items to rank. For attitudinal, axis_value is the score if this item is ranked #1. */
+  items?: RankingItem[];
+
+  // file_upload
+  allowed_types?: string[];
   max_size_mb?: number;
+}
+
+export interface RankingItem {
+  /** Stable identifier used in answer arrays and answer_key.correct. */
+  id: string;
+  label: string;
+  /** For attitudinal (1-5) — contribution to the question's axis when ranked #1. Unused for logic ranking. */
+  axis_value?: number;
+}
+
+/**
+ * Admin-only. Never sent to candidates.
+ * - multiple_choice: correct = number[] (indices of correct options)
+ * - ranking: correct = string[] (ordered item IDs, correct order)
+ * - open_text / file_upload: only ideal_answer is used
+ */
+export interface AnswerKey {
+  correct?: number[] | string[];
+  ideal_answer?: string;
+  /** Optional explicit method; inferred from question_type otherwise. */
+  scoring_method?: 'exact' | 'ranking_weighted' | 'ipsative';
+}
+
+/** ICP target + weight per axis, stored on positions.icp_config. */
+export type IcpConfig = Partial<Record<AxisType, IcpAxisConfig>>;
+
+export interface IcpAxisConfig {
+  /** Desired candidate score on this axis, 1-5. */
+  target: number;
+  /** Importance weight, 0-5. 0 = axis ignored in composite. */
+  weight: number;
+}
+
+/** Computed per-axis result on applications.axis_scores. */
+export type AxisScores = Partial<Record<AxisType, AxisScore>>;
+
+export interface AxisScore {
+  /** Raw average of axis values from candidate's top-ranked options. */
+  raw: number;
+  /** Match percentage vs ICP target, 0-100. */
+  match_pct: number;
 }
 
 // ── Insert types ──
@@ -167,6 +286,7 @@ export interface PositionInsert {
   pre_quiz_id?: string | null;
   post_quiz_id?: string | null;
   att_quiz_id?: string | null;
+  icp_config?: IcpConfig;
   slug: string;
 }
 
@@ -183,8 +303,9 @@ export interface QuizQuestionInsert {
   question_text: string;
   sort_order: number;
   points?: number;
+  axis?: AxisType | null;
   config?: QuestionConfig;
-  ideal_answer?: string | null;
+  answer_key?: AnswerKey;
 }
 
 export interface CandidateInsert {
@@ -208,4 +329,22 @@ export interface ApplicationNoteInsert {
   application_id: string;
   author_id: string;
   content: string;
+}
+
+// ── RPC return types ──
+
+export interface GetQuizForCandidateResult {
+  quiz_id: string;
+  title: string;
+  description: string | null;
+  duration_minutes: number | null;
+  questions: QuizQuestionForCandidate[];
+}
+
+export interface SubmitQuizResult {
+  total_score: number;
+  max_score: number;
+  over_time: boolean;
+  axis_scores: AxisScores;
+  composite_score: number | null;
 }

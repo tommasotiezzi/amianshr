@@ -1,8 +1,13 @@
 /**
- * Funzioni di formattazione: date, badge status, score.
+ * Formatting helpers — dates, status badges, score display, contract labels.
  */
 
-import type { PositionStatus, ApplicationStatus } from './database-types';
+import type {
+  PositionStatus,
+  ApplicationStatus,
+  ContractType,
+  AxisType,
+} from './database-types';
 
 // ── Date ──
 
@@ -47,6 +52,10 @@ export function positionStatusBadge(status: PositionStatus): string {
   return `<span class="inline-flex px-2.5 py-1 rounded-full text-xs font-medium ${s.classes}">${s.label}</span>`;
 }
 
+export function positionStatusLabel(status: PositionStatus): string {
+  return POSITION_STATUS[status]?.label ?? status;
+}
+
 // ── Application status badge ──
 
 const APP_STATUS: Record<ApplicationStatus, { label: string; classes: string; dot: string }> = {
@@ -70,6 +79,19 @@ export function applicationStatusLabel(status: ApplicationStatus): string {
   return APP_STATUS[status]?.label ?? status;
 }
 
+// ── Contract type ──
+
+const CONTRACT_LABELS: Record<ContractType, string> = {
+  full_time:  'Full-time',
+  part_time:  'Part-time',
+  freelance:  'Freelance',
+  internship: 'Stage',
+};
+
+export function contractLabel(type: ContractType | string): string {
+  return CONTRACT_LABELS[type as ContractType] ?? type;
+}
+
 // ── Score ──
 
 export function scoreDisplay(score?: number | null, max?: number | null): string {
@@ -78,3 +100,30 @@ export function scoreDisplay(score?: number | null, max?: number | null): string
   const color = pct >= 80 ? 'text-emerald-600' : pct >= 60 ? 'text-amber-600' : 'text-red-600';
   return `<span class="font-semibold text-sm ${color}">${pct}%</span>`;
 }
+
+/** Colour class for a percentage value, for axis match % or composite score. */
+export function pctColor(pct: number): string {
+  if (pct >= 80) return 'text-emerald-600';
+  if (pct >= 60) return 'text-amber-600';
+  return 'text-red-600';
+}
+
+export function compositeScoreDisplay(score: number | null): string {
+  if (score == null) return '<span class="text-amia-400 text-xs">—</span>';
+  return `<span class="font-semibold text-sm ${pctColor(score)}">${Math.round(score)}%</span>`;
+}
+
+// ── Salary ──
+
+export function salaryRange(min: number | null, max: number | null): string {
+  if (min == null) return '';
+  const lo = min.toLocaleString('it-IT');
+  const hi = (max ?? min).toLocaleString('it-IT');
+  return min === max || max == null ? `€${lo}` : `€${lo} — €${hi}`;
+}
+
+// ── Axis ──
+
+/** Re-export AXIS_LABELS from database-types for convenience. */
+export { AXIS_LABELS } from './database-types';
+export type { AxisType };

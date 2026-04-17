@@ -1,123 +1,173 @@
 /**
- * Pagina lista posizioni.
- * Mostra tutte le posizioni con filtri per status, conteggio candidature,
- * e azioni rapide (modifica, vedi candidature).
+ * Positions list — PageFactory.
+ *
+ * Shows all positions with status filter, application count per position,
+ * and quick actions (edit, view applications).
+ *
+ * State lives in closure scope — fresh per navigation.
+ * Filter persists via query string (?filter=published) for shareable URLs.
  */
 
-import { Router } from '../router';
-import { supabase } from '../lib/supabase-client';
-import { iconPlus, iconEdit, iconApplications } from '../lib/icons';
+import type { PageFactory } from '../lib/page';
+import * as q from '../lib/queries';
 import { showToast } from '../lib/toast';
-import type { Position, PositionStatus } from '../lib/database-types';
-import { formatDate, positionStatusBadge } from '../lib/formatting';
+import { iconPlus, iconEdit, iconApplications } from '../lib/icons';
+import {
+  formatDate,
+  positionStatusBadge,
+  contractLabel,
+  salaryRange,
+} from '../lib/formatting';
+import type { PositionStatus } from '../lib/database-types';
 
-interface PositionWithCount extends Position {
-  applications_count: number;
-}
+type FilterKey = PositionStatus | 'all';
 
-let currentFilter: PositionStatus | 'all' = 'all';
+const FILTERS: { key: FilterKey; label: string }[] = [
+  { key: 'all',       label: 'Tutte' },
+  { key: 'published', label: 'Pubblicate' },
+  { key: 'draft',     label: 'Bozze' },
+  { key: 'closed',    label: 'Chiuse' },
+  { key: 'archived',  label: 'Archiviate' },
+];
 
-export async function renderPositionsList(container: HTMLElement, router: Router) {
-  // Loading state
-  container.innerHTML = `
+export const createPositionsListPage: PageFactory = (ctx) => {
+  // Closure state — fresh every mount
+  let positions: q.PositionWithCount[] = [];
+  let currentFilter: FilterKey = (ctx.query.filter as FilterKey) || 'all';
+
+  return {
+    async mount() {
+      // Initial shell (so header shows immediately, list swaps in once loaded)
+      ctx.container.innerHTML = shellHtml('Caricamento...');
+
+      const res = await q.fetchPositions({ signal: ctx.signal });
+      if (ctx.signal.aborted) return;
+
+      if (res.error) {
+        showToast('Errore nel caricamento delle posizioni', 'error');
+        ctx.container.innerHTML = shellHtml('Errore nel caricamento');
+        return;
+      }
+
+      positions = res.data!;
+      renderFull();
+    },
+  };
+
+  // ── Render ──
+
+  function renderFull() {
+    ctx.container.innerHTML = `
+      <div class="p-8 max-w-5xl mx-auto">
+
+        <!-- Header -->
+        <div class="flex items-center justify-between mb-8">
+          <div>
+            <h1 class="text-2xl font-semibold text-amia-950 tracking-tight">Posizioni</h1>
+            <p class="text-amia-500 text-sm mt-1">${positions.length} posizioni totali</p>
+          </div>
+          <a
+            href="#/positions/new"
+            class="inline-flex items-center gap-2 bg-amia-950 text-white px-4 py-2.5 rounded-xl
+                   text-sm font-medium hover:bg-amia-900 active:scale-[0.98] transition-all"
+          >
+            ${iconPlus} Nuova posizione
+          </a>
+        </div>
+
+        <!-- Filters -->
+        <div class="flex items-center gap-2 mb-6" data-filters>
+          ${FILTERS.map((f) => filterBtnHtml(f.key, f.label, currentFilter)).join('')}
+        </div>
+
+        <!-- List (updated in place when filter changes) -->
+        <div class="space-y-3" data-list></div>
+      </div>
+    `;
+
+    renderList();
+    bindFilters();
+  }
+
+  function renderList() {
+    const listEl = ctx.$<HTMLDivElement>('[data-list]');
+    if (!listEl) return;
+
+    const filtered = currentFilter === 'all'
+      ? positions
+      : positions.filter((p) => p.status === currentFilter);
+
+    if (filtered.length === 0) {
+      listEl.innerHTML = `
+        <div class="text-center py-16 bg-white rounded-2xl border border-amia-100">
+          <p class="text-amia-400 text-sm">Nessuna posizione trovata</p>
+        </div>
+      `;
+      return;
+    }
+
+    listEl.innerHTML = filtered.map(positionCard).join('');
+  }
+
+  function bindFilters() {
+    ctx.$$<HTMLButtonElement>('[data-filter]').forEach((btn) => {
+      ctx.on(btn, 'click', () => {
+        const f = btn.dataset.filter as FilterKey;
+        if (f === currentFilter) return;
+        currentFilter = f;
+        // Update the filter buttons' visual state without rebuilding the whole page
+        ctx.$$<HTMLButtonElement>('[data-filter]').forEach((b) => {
+          const active = b.dataset.filter === currentFilter;
+          b.className = filterBtnClasses(active);
+        });
+        renderList();
+      });
+    });
+  }
+};
+
+// ── HTML fragments ──
+
+function shellHtml(statusLine: string): string {
+  return `
     <div class="p-8 max-w-5xl mx-auto">
       <div class="flex items-center justify-between mb-8">
         <div>
           <h1 class="text-2xl font-semibold text-amia-950 tracking-tight">Posizioni</h1>
-          <p class="text-amia-500 text-sm mt-1">Caricamento...</p>
+          <p class="text-amia-500 text-sm mt-1">${statusLine}</p>
         </div>
       </div>
       <div class="flex justify-center py-20"><div class="spinner"></div></div>
     </div>
   `;
-
-  // Fetch positions with application count
-  const { data: positions, error } = await supabase
-    .from('positions')
-    .select('*, applications(count)')
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    showToast('Errore nel caricamento delle posizioni', 'error');
-    return;
-  }
-
-  // Map the count from Supabase's nested response
-  const positionsWithCount: PositionWithCount[] = (positions ?? []).map((p: any) => ({
-    ...p,
-    applications_count: p.applications?.[0]?.count ?? 0,
-  }));
-
-  render(container, router, positionsWithCount);
 }
 
-function render(container: HTMLElement, router: Router, positions: PositionWithCount[]) {
-  const filtered = currentFilter === 'all'
-    ? positions
-    : positions.filter((p) => p.status === currentFilter);
+function filterBtnClasses(active: boolean): string {
+  return `filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+    active
+      ? 'bg-amia-950 text-white'
+      : 'bg-white text-amia-600 border border-amia-200 hover:border-amia-300'
+  }`;
+}
 
-  const filters: { key: PositionStatus | 'all'; label: string }[] = [
-    { key: 'all', label: 'Tutte' },
-    { key: 'published', label: 'Pubblicate' },
-    { key: 'draft', label: 'Bozze' },
-    { key: 'closed', label: 'Chiuse' },
-    { key: 'archived', label: 'Archiviate' },
-  ];
-
-  container.innerHTML = `
-    <div class="p-8 max-w-5xl mx-auto">
-
-      <!-- Header -->
-      <div class="flex items-center justify-between mb-8">
-        <div>
-          <h1 class="text-2xl font-semibold text-amia-950 tracking-tight">Posizioni</h1>
-          <p class="text-amia-500 text-sm mt-1">${positions.length} posizioni totali</p>
-        </div>
-        <a
-          href="#/positions/new"
-          class="inline-flex items-center gap-2 bg-amia-950 text-white px-4 py-2.5 rounded-xl
-                 text-sm font-medium hover:bg-amia-900 active:scale-[0.98] transition-all"
-        >
-          ${iconPlus} Nuova posizione
-        </a>
-      </div>
-
-      <!-- Filtri -->
-      <div class="flex items-center gap-2 mb-6">
-        ${filters.map((f) => `
-          <button
-            class="filter-btn px-3 py-1.5 rounded-lg text-xs font-medium transition-all
-              ${currentFilter === f.key
-                ? 'bg-amia-950 text-white'
-                : 'bg-white text-amia-600 border border-amia-200 hover:border-amia-300'
-              }"
-            data-filter="${f.key}"
-          >${f.label}</button>
-        `).join('')}
-      </div>
-
-      <!-- Lista -->
-      <div class="space-y-3" id="positions-list">
-        ${filtered.length > 0
-          ? filtered.map((p) => positionCard(p)).join('')
-          : `<div class="text-center py-16 bg-white rounded-2xl border border-amia-100">
-               <p class="text-amia-400 text-sm">Nessuna posizione trovata</p>
-             </div>`
-        }
-      </div>
-    </div>
+function filterBtnHtml(key: FilterKey, label: string, current: FilterKey): string {
+  const active = key === current;
+  return `
+    <button
+      class="${filterBtnClasses(active)}"
+      data-filter="${key}"
+    >${label}</button>
   `;
-
-  // Bind filtri
-  container.querySelectorAll('.filter-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      currentFilter = (btn as HTMLElement).dataset.filter as PositionStatus | 'all';
-      render(container, router, positions);
-    });
-  });
 }
 
-function positionCard(p: PositionWithCount): string {
+function positionCard(p: q.PositionWithCount): string {
+  const ral = salaryRange(p.salary_min, p.salary_max);
+  const quizBadges = [
+    p.pre_quiz_id  ? 'Logica' : '',
+    p.post_quiz_id ? 'Skills' : '',
+    p.att_quiz_id  ? 'Att.'   : '',
+  ].filter(Boolean).join(' · ');
+
   return `
     <div class="bg-white rounded-2xl border border-amia-100 p-5
                 hover:shadow-card hover:border-amia-200 transition-all">
@@ -128,13 +178,9 @@ function positionCard(p: PositionWithCount): string {
             ${positionStatusBadge(p.status)}
           </div>
           <p class="text-xs text-amia-400">
-            ${p.department} · ${p.location} · ${p.contract_type}
+            ${p.department} · ${p.location} · ${contractLabel(p.contract_type)}
           </p>
-          ${p.salary_min ? `
-            <p class="text-xs text-amia-400 mt-1">
-              RAL: €${p.salary_min.toLocaleString('it-IT')} — €${(p.salary_max ?? p.salary_min).toLocaleString('it-IT')}
-            </p>
-          ` : ''}
+          ${ral ? `<p class="text-xs text-amia-400 mt-1">RAL: ${ral}</p>` : ''}
         </div>
         <div class="flex items-center gap-2 ml-4 shrink-0">
           <a href="#/positions/${p.id}/applications"
@@ -153,14 +199,10 @@ function positionCard(p: PositionWithCount): string {
         <span class="text-xs text-amia-400">Creata il ${formatDate(p.created_at)}</span>
         ${p.published_at
           ? `<span class="text-xs text-amia-400">Pubblicata il ${formatDate(p.published_at)}</span>`
-          : ''
-        }
-        ${p.pre_quiz_id || p.post_quiz_id || p.att_quiz_id
-          ? `<span class="text-xs text-accent font-medium">
-              ${[p.pre_quiz_id ? 'Logica' : '', p.post_quiz_id ? 'Skills' : '', p.att_quiz_id ? 'Attitudinale' : ''].filter(Boolean).join(' + ')}
-            </span>`
-          : '<span class="text-xs text-amia-300">Nessun quiz</span>'
-        }
+          : ''}
+        ${quizBadges
+          ? `<span class="text-xs text-accent font-medium">${quizBadges}</span>`
+          : ''}
       </div>
     </div>
   `;
