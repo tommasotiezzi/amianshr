@@ -64,7 +64,7 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
     let mcCorrect: number[] = (existing?.answer_key?.correct as number[]) ?? [0];
 
     // Ranking state
-    let rankingItems: RankingItem[] = (existing?.config?.items as RankingItem[]) ?? [
+    let rankingItems: RankingItem[] = (existing?.config?.options as RankingItem[]) ?? [
       { id: 'a', label: '', axis_value: 4 },
       { id: 'b', label: '', axis_value: 3 },
       { id: 'c', label: '', axis_value: 2 },
@@ -447,7 +447,7 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
         const cleanCorrectIds = rankingCorrect.filter((id) => cleanItems.find((i) => i.id === id));
         if (cleanItems.length < 2) { showToast('Servono almeno 2 elementi', 'error'); return; }
 
-        config.items = cleanItems;
+        config.options = cleanItems;
         answerKey.correct = cleanCorrectIds;
         answerKey.scoring_method = showAxisPicker ? 'ipsative' : 'ranking_weighted';
       }

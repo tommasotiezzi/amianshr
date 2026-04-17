@@ -216,15 +216,16 @@ export interface QuizResponse {
 /**
  * Candidate-visible portion of a question.
  * No correct answers here — those live in AnswerKey.
+ *
+ * `options` is overloaded:
+ *   - multiple_choice: string[] (option labels)
+ *   - ranking: RankingItem[] (items with stable ids + axis_value)
+ * Use type assertions when reading: `config.options as RankingItem[]`
  */
 export interface QuestionConfig {
-  // multiple_choice
-  options?: string[];
+  // multiple_choice OR ranking
+  options?: string[] | RankingItem[];
   allow_multiple?: boolean;
-
-  // ranking (attitudinal & logic case studies)
-  /** Items to rank. For attitudinal, axis_value is the score if this item is ranked #1. */
-  items?: RankingItem[];
 
   // file_upload
   allowed_types?: string[];

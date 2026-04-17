@@ -23,7 +23,7 @@ import type {
   AnswerKey,
   RankingItem,
 } from '../lib/database-types';
-import { openQuestionModal } from '../pages/quiz-editor-modal';
+import { openQuestionModal } from './quiz-editor-modal';
 
 const QUIZ_TYPES: { value: QuizType; label: string }[] = [
   { value: 'logic',       label: 'Logica (pre-screening)' },
@@ -360,7 +360,7 @@ function renderCardBody(qn: QuizQuestion, config: QuestionConfig, answerKey: Ans
   }
 
   if (qn.question_type === 'ranking') {
-    const items = (config?.items as RankingItem[]) ?? [];
+    const items = (config?.options as RankingItem[]) ?? [];
     const correctOrder = (answerKey?.correct as string[]) ?? [];
     // Show items in correct order
     const ordered = correctOrder.map((id) => items.find((it) => it.id === id)).filter(Boolean) as RankingItem[];
