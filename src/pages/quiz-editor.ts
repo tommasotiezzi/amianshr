@@ -13,6 +13,7 @@ import { supabase } from '../lib/supabase-client';
 import * as q from '../lib/queries';
 import { showToast } from '../lib/toast';
 import { iconPlus } from '../lib/icons';
+import { questionImages } from '../lib/question-images';
 import { AXIS_LABELS } from '../lib/database-types';
 import type {
   Quiz,
@@ -203,9 +204,16 @@ export const createQuizEditorPage: PageFactory = (ctx) => {
         const id = btn.dataset.id!;
         if (!confirm('Eliminare questa domanda?')) return;
 
+        // Grab the image URL (if any) before deleting — we'll clean up storage after
+        const question = questions.find((qn) => qn.id === id);
+        const imageUrl = question?.config?.image_url ?? null;
+
         const { error } = await supabase.from('quiz_questions').delete().eq('id', id);
         if (ctx.signal.aborted) return;
         if (error) { showToast(`Errore: ${error.message}`, 'error'); return; }
+
+        // Fire-and-forget image cleanup
+        if (imageUrl) questionImages.delete(imageUrl).catch(() => {});
 
         questions = questions.filter((qn) => qn.id !== id);
         showToast('Domanda eliminata');
@@ -323,6 +331,13 @@ function questionCard(qn: QuizQuestion, index: number): string {
       </div>
 
       <p class="text-sm text-amia-900 mb-2">${escapeText(qn.question_text)}</p>
+
+      ${config?.image_url ? `
+        <div class="mb-3 rounded-xl overflow-hidden border border-amia-100 bg-amia-50">
+          <img src="${escapeAttr(config.image_url)}" alt=""
+               class="w-full max-h-56 object-contain bg-white" loading="lazy" />
+        </div>
+      ` : ''}
 
       ${renderCardBody(qn, config, answerKey)}
 

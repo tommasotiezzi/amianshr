@@ -17,6 +17,7 @@
 
 import { supabase } from '../lib/supabase-client';
 import { showToast } from '../lib/toast';
+import { questionImages } from '../lib/question-images';
 import {
   AXES,
   AXIS_LABELS,
@@ -58,6 +59,8 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
     let axis: AxisType | null = existing?.axis ?? null;
     let questionText = existing?.question_text ?? '';
     let idealAnswer = existing?.answer_key?.ideal_answer ?? '';
+    let imageUrl: string | null = existing?.config?.image_url ?? null;
+    let imageUploading = false;
 
     // MC state
     let mcOptions: string[] = (existing?.config?.options as string[]) ?? ['', '', '', ''];
@@ -203,6 +206,74 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
       }
     }
 
+    // ── Image slot ──
+
+    function renderImageSlot() {
+      const slot = modal.querySelector<HTMLElement>('#q-image-slot');
+      if (!slot) return;
+
+      if (imageUploading) {
+        slot.innerHTML = `
+          <div class="px-4 py-6 rounded-xl border-2 border-dashed border-amia-200 bg-amia-50/50 text-center">
+            <div class="inline-flex items-center gap-2 text-xs text-amia-500">
+              <div class="spinner"></div> Caricamento...
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      if (imageUrl) {
+        slot.innerHTML = `
+          <div class="rounded-xl border border-amia-100 overflow-hidden bg-amia-50">
+            <img src="${escapeAttr(imageUrl)}" alt="Immagine domanda"
+                 class="w-full max-h-64 object-contain bg-white" />
+            <div class="flex items-center justify-between px-3 py-2 bg-white border-t border-amia-100">
+              <span class="text-[11px] text-amia-400 truncate">Immagine caricata</span>
+              <button type="button" id="q-image-remove"
+                class="text-xs text-red-600 hover:underline">Rimuovi</button>
+            </div>
+          </div>
+        `;
+        const removeBtn = slot.querySelector<HTMLButtonElement>('#q-image-remove');
+        on(removeBtn, 'click', async () => {
+          if (!imageUrl) return;
+          const urlToDelete = imageUrl;
+          imageUrl = null;
+          renderImageSlot();
+          // Fire-and-forget — don't block UI on bucket cleanup
+          questionImages.delete(urlToDelete).catch(() => {});
+        });
+        return;
+      }
+
+      slot.innerHTML = `
+        <label for="q-image-input"
+          class="block px-4 py-6 rounded-xl border-2 border-dashed border-amia-200 bg-white hover:bg-amia-50/40
+                 transition-colors cursor-pointer text-center">
+          <p class="text-xs font-medium text-amia-600">+ Carica immagine</p>
+          <p class="text-[11px] text-amia-400 mt-1">JPG, PNG, WebP &middot; max 1600px, compressa automaticamente</p>
+          <input type="file" id="q-image-input" accept="image/*" class="hidden" />
+        </label>
+      `;
+      const input = slot.querySelector<HTMLInputElement>('#q-image-input');
+      on(input, 'change', async () => {
+        const file = input?.files?.[0];
+        if (!file) return;
+        imageUploading = true;
+        renderImageSlot();
+        try {
+          const { url } = await questionImages.upload(file);
+          imageUrl = url;
+        } catch (e: any) {
+          showToast(e?.message ?? 'Errore nel caricamento', 'error');
+        } finally {
+          imageUploading = false;
+          renderImageSlot();
+        }
+      });
+    }
+
     function renderMcBody(): string {
       return `
         <label class="block text-xs font-medium text-amia-600 mb-1.5">
@@ -285,8 +356,9 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
       axis = (axisSelect?.value || null) as AxisType | null;
     });
 
-    // Initial body render
+    // Initial body render + image slot
     renderBody();
+    renderImageSlot();
 
     // ── MC events ──
 
@@ -406,8 +478,18 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
 
     // ── Cancel ──
 
-    on(modal.querySelector<HTMLButtonElement>('#cancel-btn'), 'click', () => close(null));
-    on(modal, 'click', (e) => { if (e.target === modal) close(null); });
+    // If user uploaded a new image but didn't save (and the question didn't already
+    // have this image), clean up the orphan from storage.
+    const originalImageUrl = existing?.config?.image_url ?? null;
+    const cancelWithOrphanCleanup = () => {
+      if (imageUrl && imageUrl !== originalImageUrl) {
+        questionImages.delete(imageUrl).catch(() => {});
+      }
+      close(null);
+    };
+
+    on(modal.querySelector<HTMLButtonElement>('#cancel-btn'), 'click', cancelWithOrphanCleanup);
+    on(modal, 'click', (e) => { if (e.target === modal) cancelWithOrphanCleanup(); });
 
     // ── Save ──
 
@@ -421,6 +503,7 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
       const config: QuestionConfig = {};
       const answerKey: AnswerKey = {};
       if (idealAnswer) answerKey.ideal_answer = idealAnswer;
+      if (imageUrl) config.image_url = imageUrl;
 
       // Build config + answer_key based on type
       if (qType === 'multiple_choice') {
@@ -476,6 +559,13 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
       }
 
       if (error) { showToast(`Errore: ${error.message}`, 'error'); return; }
+
+      // If we successfully saved and the old image was replaced or removed,
+      // delete the old file from storage.
+      if (originalImageUrl && originalImageUrl !== imageUrl) {
+        questionImages.delete(originalImageUrl).catch(() => {});
+      }
+
       showToast(existing ? 'Domanda aggiornata' : 'Domanda aggiunta');
       close(data);
     });

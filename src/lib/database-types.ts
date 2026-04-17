@@ -223,6 +223,10 @@ export interface QuizResponse {
  * Use type assertions when reading: `config.options as RankingItem[]`
  */
 export interface QuestionConfig {
+  // Optional image shown above the question text.
+  // Public URL from the question-images storage bucket.
+  image_url?: string;
+
   // multiple_choice OR ranking
   options?: string[] | RankingItem[];
   allow_multiple?: boolean;
