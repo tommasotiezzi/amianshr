@@ -289,39 +289,39 @@ export const createPositionFormPage: PageFactory = (ctx) => {
     `;
   }
 
-  function axisRowHtml(axis: AxisType, cfg: { target: number; weight: number } | undefined): string {
-    const target = cfg?.target ?? 3;
-    const weight = cfg?.weight ?? 0;
-    const isActive = weight > 0;
-    return `
-      <div class="axis-row flex items-center gap-4 py-2.5 px-3 rounded-xl bg-white border border-amia-50
-                  ${isActive ? '' : 'opacity-50'}" data-axis="${axis}">
+function axisRowHtml(axis: AxisType, cfg: { target: number; weight: number } | undefined): string {
+  const target = cfg?.target ?? 3;
+  const weight = cfg?.weight ?? 0;
+  const isActive = weight > 0;
+  return `
+    <div class="axis-row flex items-center gap-5 py-2.5 px-3 rounded-xl bg-white border border-amia-50
+                ${isActive ? '' : 'opacity-50'}" data-axis="${axis}">
 
-        <!-- Axis name -->
-        <div class="flex-1 min-w-0">
-          <p class="text-xs font-medium text-amia-900 truncate">${AXIS_LABELS[axis]}</p>
-        </div>
-
-        <!-- Target slider -->
-        <div class="flex items-center gap-2 w-40 shrink-0">
-          <span class="text-[10px] font-medium text-amia-400 w-10">Target</span>
-          <input type="range" min="1" max="5" step="1" value="${target}"
-            data-role="target" data-axis="${axis}"
-            class="flex-1 accent-amia-950" />
-          <span class="text-xs font-semibold text-amia-900 w-4 text-right" data-readout="target" data-axis="${axis}">${target}</span>
-        </div>
-
-        <!-- Weight slider -->
-        <div class="flex items-center gap-2 w-40 shrink-0">
-          <span class="text-[10px] font-medium text-amia-400 w-10">Peso</span>
-          <input type="range" min="0" max="5" step="1" value="${weight}"
-            data-role="weight" data-axis="${axis}"
-            class="flex-1 accent-accent" />
-          <span class="text-xs font-semibold text-amia-900 w-4 text-right" data-readout="weight" data-axis="${axis}">${weight}</span>
-        </div>
+      <!-- Axis name -->
+      <div class="flex-1 min-w-0">
+        <p class="text-xs font-medium text-amia-900 truncate">${AXIS_LABELS[axis]}</p>
       </div>
-    `;
-  }
+
+      <!-- Target slider -->
+      <div class="flex items-center gap-2 w-44 shrink-0">
+        <span class="text-[10px] font-medium text-amia-400 w-8 shrink-0">Target</span>
+        <input type="range" min="1" max="5" step="1" value="${target}"
+          data-role="target" data-axis="${axis}"
+          class="flex-1 min-w-0 accent-amia-950" />
+        <span class="text-xs font-semibold text-amia-900 w-4 text-right shrink-0" data-readout="target" data-axis="${axis}">${target}</span>
+      </div>
+
+      <!-- Weight slider -->
+      <div class="flex items-center gap-2 w-44 shrink-0">
+        <span class="text-[10px] font-medium text-amia-400 w-8 shrink-0">Peso</span>
+        <input type="range" min="0" max="5" step="1" value="${weight}"
+          data-role="weight" data-axis="${axis}"
+          class="flex-1 min-w-0 accent-accent" />
+        <span class="text-xs font-semibold text-amia-900 w-4 text-right shrink-0" data-readout="weight" data-axis="${axis}">${weight}</span>
+      </div>
+    </div>
+  `;
+}
 
   // ── Events ──
 
