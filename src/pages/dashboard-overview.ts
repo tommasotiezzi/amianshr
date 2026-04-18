@@ -48,15 +48,15 @@ export const createDashboardPage: PageFactory = (ctx) => {
   ctx.container.innerHTML = loadingShell();
 
   Promise.all([
-    supabase.from('applications').select('status').abortSignal(ctx.signal),
-    supabase.from('positions').select('status').abortSignal(ctx.signal),
-    supabase.from('quizzes').select('id').abortSignal(ctx.signal),
+    supabase.from('applications').select('status'),
+    supabase.from('positions').select('status'),
+    supabase.from('quizzes').select('id'),
     supabase.from('applications').select(`
       id, status, created_at,
       pre_quiz_score, pre_quiz_max_score, pre_quiz_completed_at, post_quiz_completed_at, composite_score,
       candidate:candidates(first_name, last_name),
       position:positions(title)
-    `).order('created_at', { ascending: false }).limit(5).abortSignal(ctx.signal),
+    `).order('created_at', { ascending: false }).limit(5),
     supabase.from('applications').select(`
       id, composite_score, created_at,
       candidate:candidates(first_name, last_name),
@@ -65,7 +65,7 @@ export const createDashboardPage: PageFactory = (ctx) => {
       .not('composite_score', 'is', null)
       .order('composite_score', { ascending: false })
       .limit(5)
-      .abortSignal(ctx.signal),
+      ,
   ])
     .then(([appsRes, posRes, quizRes, recentRes, topRes]) => {
       if (ctx.signal.aborted) return;

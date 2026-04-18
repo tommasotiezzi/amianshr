@@ -65,8 +65,8 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
       att_quiz_completed_at, axis_scores, composite_score,
       candidate:candidates(id, first_name, last_name, email, phone, linkedin_url),
       position:positions(id, title, department, icp_config)
-    `).eq('id', appId).single().abortSignal(ctx.signal),
-    supabase.from('application_notes').select('*').eq('application_id', appId).order('created_at', { ascending: false }).abortSignal(ctx.signal),
+    `).eq('id', appId).single(),
+    supabase.from('application_notes').select('*').eq('application_id', appId).order('created_at', { ascending: false }),
   ])
     .then(([appRes, notesRes]: any[]) => {
       if (ctx.signal.aborted) return;
