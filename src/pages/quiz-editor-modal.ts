@@ -151,6 +151,15 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
                 >${escapeText(questionText)}</textarea>
               </div>
 
+              <!-- Image (optional, shown above question on candidate side) -->
+              <div>
+                <label class="block text-xs font-medium text-amia-600 mb-1.5">
+                  Immagine (opzionale)
+                  <span class="text-amia-400 font-normal">— mostrata sopra la domanda</span>
+                </label>
+                <div id="q-image-slot"></div>
+              </div>
+
               <!-- Type-specific body -->
               <div id="q-body"></div>
 
