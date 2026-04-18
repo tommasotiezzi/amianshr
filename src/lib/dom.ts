@@ -1,8 +1,7 @@
 /**
  * DOM helpers used by the page context.
  *
- * These are the low-level primitives — you don't import them directly from pages.
- * Use ctx.on / ctx.$ / ctx.$$ instead (defined in router.ts when building PageContext).
+ * Pages use these indirectly via ctx.on / ctx.$ / ctx.$$ / ctx.onCleanup.
  */
 
 /** Create a scoped query selector bound to a root element. */
@@ -17,10 +16,10 @@ export function createScopedQuery(root: HTMLElement) {
   };
 }
 
+type EventTargetLike = HTMLElement | Document | Window | null | undefined;
+
 /**
- * Disposer tracker — collects cleanup functions so they can all fire on unmount.
- *
- * Pages use this indirectly via ctx.on() and ctx.onCleanup().
+ * Disposer tracker — collects cleanup functions so they all fire on unmount.
  */
 export class DisposerSet {
   private disposers: Array<() => void> = [];
@@ -28,12 +27,11 @@ export class DisposerSet {
 
   add(fn: () => void): () => void {
     if (this.disposed) {
-      // If already disposed, run immediately (shouldn't happen in practice, but safe)
-      fn();
+      // Already disposed → run immediately
+      try { fn(); } catch (e) { console.error('Disposer error:', e); }
       return () => {};
     }
     this.disposers.push(fn);
-    // Return a manual disposer that removes this one and runs it
     return () => {
       const i = this.disposers.indexOf(fn);
       if (i >= 0) {
@@ -43,9 +41,9 @@ export class DisposerSet {
     };
   }
 
-  /** Attach a listener and auto-register its removal as a disposer. */
+  /** Attach a listener and register its removal as a disposer. */
   addListener<K extends keyof HTMLElementEventMap>(
-    target: HTMLElement | null | undefined,
+    target: EventTargetLike,
     event: K,
     handler: (ev: HTMLElementEventMap[K]) => void,
     options?: AddEventListenerOptions,
@@ -60,7 +58,6 @@ export class DisposerSet {
   disposeAll(): void {
     if (this.disposed) return;
     this.disposed = true;
-    // Iterate backwards — later disposers might depend on earlier ones still being alive
     for (let i = this.disposers.length - 1; i >= 0; i--) {
       try { this.disposers[i](); } catch (e) { console.error('Disposer error:', e); }
     }

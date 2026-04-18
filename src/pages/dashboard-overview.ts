@@ -1,11 +1,5 @@
 /**
- * Dashboard — PageFactory.
- *
- * Admin overview:
- *   - Stats cards (total apps, interview, hired, active positions)
- *   - Pipeline visualization
- *   - Recent applications (latest 5)
- *   - Top candidates by composite ICP match (NEW) — only shown if any exist
+ * Dashboard — sync mount.
  */
 
 import type { PageFactory } from '../lib/page';
@@ -18,8 +12,6 @@ import {
   compositeScoreDisplay,
 } from '../lib/formatting';
 import type { ApplicationStatus } from '../lib/database-types';
-
-// ── Types ──
 
 interface DashboardStats {
   totalApplications: number;
@@ -52,36 +44,31 @@ interface TopCandidate {
   position: { title: string; department: string };
 }
 
-// ── Factory ──
-
 export const createDashboardPage: PageFactory = (ctx) => {
-  return {
-    async mount() {
-      ctx.container.innerHTML = loadingShell();
+  ctx.container.innerHTML = loadingShell();
 
-      const [appsRes, posRes, quizRes, recentRes, topRes] = await Promise.all([
-        supabase.from('applications').select('status').abortSignal(ctx.signal),
-        supabase.from('positions').select('status').abortSignal(ctx.signal),
-        supabase.from('quizzes').select('id').abortSignal(ctx.signal),
-        supabase.from('applications').select(`
-          id, status, created_at,
-          pre_quiz_score, pre_quiz_max_score, pre_quiz_completed_at, post_quiz_completed_at, composite_score,
-          candidate:candidates(first_name, last_name),
-          position:positions(title)
-        `).order('created_at', { ascending: false }).limit(5).abortSignal(ctx.signal),
-        supabase.from('applications').select(`
-          id, composite_score, created_at,
-          candidate:candidates(first_name, last_name),
-          position:positions(title, department)
-        `)
-          .not('composite_score', 'is', null)
-          .order('composite_score', { ascending: false })
-          .limit(5)
-          .abortSignal(ctx.signal),
-      ]);
-
+  Promise.all([
+    supabase.from('applications').select('status').abortSignal(ctx.signal),
+    supabase.from('positions').select('status').abortSignal(ctx.signal),
+    supabase.from('quizzes').select('id').abortSignal(ctx.signal),
+    supabase.from('applications').select(`
+      id, status, created_at,
+      pre_quiz_score, pre_quiz_max_score, pre_quiz_completed_at, post_quiz_completed_at, composite_score,
+      candidate:candidates(first_name, last_name),
+      position:positions(title)
+    `).order('created_at', { ascending: false }).limit(5).abortSignal(ctx.signal),
+    supabase.from('applications').select(`
+      id, composite_score, created_at,
+      candidate:candidates(first_name, last_name),
+      position:positions(title, department)
+    `)
+      .not('composite_score', 'is', null)
+      .order('composite_score', { ascending: false })
+      .limit(5)
+      .abortSignal(ctx.signal),
+  ])
+    .then(([appsRes, posRes, quizRes, recentRes, topRes]) => {
       if (ctx.signal.aborted) return;
-
       if (appsRes.error || posRes.error || quizRes.error) {
         showToast('Errore nel caricamento', 'error');
         return;
@@ -111,23 +98,21 @@ export const createDashboardPage: PageFactory = (ctx) => {
       }));
 
       renderFull(ctx.container, stats, recent, top);
-    },
-  };
+    })
+    .catch((err) => {
+      if (ctx.signal.aborted) return;
+      console.error('[dashboard]', err);
+    });
 };
-
-// ── Render ──
 
 function renderFull(container: HTMLElement, stats: DashboardStats, recent: RecentApp[], top: TopCandidate[]) {
   container.innerHTML = `
     <div class="p-8 max-w-6xl mx-auto">
-
-      <!-- Header -->
       <div class="mb-8">
         <h1 class="text-2xl font-semibold text-amia-950 tracking-tight">Dashboard</h1>
         <p class="text-amia-500 text-sm mt-1">Panoramica del recruiting</p>
       </div>
 
-      <!-- Stats cards -->
       <div class="grid grid-cols-4 gap-4 mb-8">
         ${statCard('Candidature',      stats.totalApplications)}
         ${statCard('In colloquio',     stats.interviewCount)}
@@ -135,10 +120,8 @@ function renderFull(container: HTMLElement, stats: DashboardStats, recent: Recen
         ${statCard('Posizioni attive', stats.activePositions)}
       </div>
 
-      <!-- Pipeline -->
       ${pipelineSection(stats)}
 
-      <!-- Two-column bottom row: top candidates (if any) + recent -->
       <div class="grid ${top.length > 0 ? 'grid-cols-2' : 'grid-cols-1'} gap-6 mt-6">
         ${top.length > 0 ? topCandidatesSection(top) : ''}
         ${recentSection(recent)}
@@ -189,9 +172,7 @@ function topCandidatesSection(top: TopCandidate[]): string {
                 <p class="text-xs text-amia-400 truncate">${escapeText(t.position.title)}</p>
               </div>
             </div>
-            <div class="shrink-0 ml-3">
-              ${compositeScoreDisplay(t.composite_score)}
-            </div>
+            <div class="shrink-0 ml-3">${compositeScoreDisplay(t.composite_score)}</div>
           </a>
         `).join('')}
       </div>
@@ -235,14 +216,10 @@ function recentSection(recent: RecentApp[]): string {
             </a>
           `).join('')}
         </div>
-      ` : `
-        <p class="text-sm text-amia-400 text-center py-8">Nessuna candidatura ancora</p>
-      `}
+      ` : `<p class="text-sm text-amia-400 text-center py-8">Nessuna candidatura ancora</p>`}
     </div>
   `;
 }
-
-// ── Small components ──
 
 function statCard(label: string, value: number): string {
   return `
@@ -269,8 +246,6 @@ function pipelineLegend(dotColor: string, label: string, count: number): string 
   `;
 }
 
-// ── Shell + helpers ──
-
 function loadingShell(): string {
   return `
     <div class="p-8 max-w-6xl mx-auto">
@@ -283,6 +258,4 @@ function loadingShell(): string {
   `;
 }
 
-function escapeText(s: string): string {
-  return s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+function escapeText(s: string): string { return s.replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

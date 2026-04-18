@@ -1,10 +1,5 @@
 /**
- * Settings — PageFactory.
- *
- * Email templates (CRUD) + SMTP configuration placeholder.
- *
- * Templates live in the email_templates table with a fixed set of triggers.
- * SMTP config is a UI stub — real sending will need Edge Functions.
+ * Settings — sync mount.
  */
 
 import type { PageFactory } from '../lib/page';
@@ -13,8 +8,6 @@ import * as q from '../lib/queries';
 import { showToast } from '../lib/toast';
 import { iconEdit } from '../lib/icons';
 import type { EmailTemplate } from '../lib/database-types';
-
-// ── Static config ──
 
 const TRIGGER_LABELS: Record<string, string> = {
   application_received: 'Candidatura ricevuta',
@@ -37,32 +30,27 @@ const PREVIEW_VALUES: Record<string, string> = {
   '{portal_url}':     'https://ats.amia.technology',
 };
 
-// ── Factory ──
-
 export const createSettingsPage: PageFactory = (ctx) => {
-  // Closure state
   let templates: EmailTemplate[] = [];
 
-  return {
-    async mount() {
-      ctx.container.innerHTML = loadingShell();
+  ctx.container.innerHTML = loadingShell();
 
-      const res = await q.fetchEmailTemplates({ signal: ctx.signal });
+  q.fetchEmailTemplates({ signal: ctx.signal })
+    .then((res) => {
       if (ctx.signal.aborted) return;
-
       if (res.error) {
         showToast('Errore nel caricamento', 'error');
         ctx.container.innerHTML = errorShell();
         return;
       }
-
       templates = res.data!;
       renderFull();
       bindEvents();
-    },
-  };
-
-  // ── Render ──
+    })
+    .catch((err) => {
+      if (ctx.signal.aborted) return;
+      console.error('[settings]', err);
+    });
 
   function renderFull() {
     ctx.container.innerHTML = `
@@ -73,7 +61,6 @@ export const createSettingsPage: PageFactory = (ctx) => {
         </div>
 
         ${smtpSection()}
-
         ${placeholderReference()}
 
         <div class="space-y-4">
@@ -89,16 +76,7 @@ export const createSettingsPage: PageFactory = (ctx) => {
     `;
   }
 
-  function rerenderTemplates() {
-    // Only update the templates section in place
-    renderFull();
-    bindEvents();
-  }
-
-  // ── Events ──
-
   function bindEvents() {
-    // SMTP placeholders
     ctx.on(ctx.$<HTMLButtonElement>('#save-smtp-btn'), 'click', () => {
       showToast('Configurazione SMTP salvata (locale). Edge Functions necessarie per invio reale.');
     });
@@ -106,7 +84,6 @@ export const createSettingsPage: PageFactory = (ctx) => {
       showToast('Funzionalità non ancora disponibile — richiede Edge Functions', 'error');
     });
 
-    // Template edit buttons
     ctx.$$<HTMLButtonElement>('.edit-template-btn').forEach((btn) => {
       ctx.on(btn, 'click', () => {
         const id = btn.dataset.id!;
@@ -116,8 +93,6 @@ export const createSettingsPage: PageFactory = (ctx) => {
     });
   }
 
-  // ── Template modal ──
-
   function openTemplateModal(t: EmailTemplate) {
     const label = TRIGGER_LABELS[t.trigger] ?? t.trigger;
 
@@ -126,7 +101,6 @@ export const createSettingsPage: PageFactory = (ctx) => {
     modal.innerHTML = renderTemplateModal(t, label);
     document.body.appendChild(modal);
 
-    // Local disposer tracker for the modal
     const disposers: Array<() => void> = [];
     const on = <K extends keyof HTMLElementEventMap>(
       target: HTMLElement | null | undefined,
@@ -138,12 +112,19 @@ export const createSettingsPage: PageFactory = (ctx) => {
       disposers.push(() => target.removeEventListener(event, handler as EventListener));
     };
 
+    let closed = false;
     const close = () => {
-      disposers.forEach((d) => d());
+      if (closed) return;
+      closed = true;
+      disposers.forEach((d) => { try { d(); } catch {} });
       modal.remove();
     };
 
-    // Live preview
+    // Auto-close on navigation
+    const onAbort = () => close();
+    ctx.signal.addEventListener('abort', onAbort);
+    disposers.push(() => ctx.signal.removeEventListener('abort', onAbort));
+
     const bodyTextarea = modal.querySelector<HTMLTextAreaElement>('#tpl-body');
     const preview = modal.querySelector<HTMLElement>('#tpl-preview');
 
@@ -152,43 +133,33 @@ export const createSettingsPage: PageFactory = (ctx) => {
       preview.innerHTML = renderPreview(bodyTextarea.value);
     });
 
-    // Close actions
     on(modal.querySelector<HTMLButtonElement>('#cancel-tpl-btn'), 'click', close);
     on(modal, 'click', (e) => { if (e.target === modal) close(); });
 
-    // Save
-    on(modal.querySelector<HTMLButtonElement>('#save-tpl-btn'), 'click', async () => {
+    on(modal.querySelector<HTMLButtonElement>('#save-tpl-btn'), 'click', () => {
       const subjectEl = modal.querySelector<HTMLInputElement>('#tpl-subject');
       const subject = subjectEl?.value.trim() ?? '';
       const bodyHtml = bodyTextarea?.value.trim() ?? '';
+      if (!subject || !bodyHtml) { showToast('Compila oggetto e corpo', 'error'); return; }
 
-      if (!subject || !bodyHtml) {
-        showToast('Compila oggetto e corpo', 'error');
-        return;
-      }
+      supabase.from('email_templates').update({ subject, body_html: bodyHtml }).eq('id', t.id)
+        .then(({ error }) => {
+          if (closed || ctx.signal.aborted) return;
+          if (error) { showToast(`Errore: ${error.message}`, 'error'); return; }
 
-      const { error } = await supabase
-        .from('email_templates')
-        .update({ subject, body_html: bodyHtml })
-        .eq('id', t.id);
+          const idx = templates.findIndex((tpl) => tpl.id === t.id);
+          if (idx >= 0) templates[idx] = { ...templates[idx], subject, body_html: bodyHtml };
 
-      if (ctx.signal.aborted) return;
-      if (error) { showToast(`Errore: ${error.message}`, 'error'); return; }
-
-      // Update local state
-      const idx = templates.findIndex((tpl) => tpl.id === t.id);
-      if (idx >= 0) {
-        templates[idx] = { ...templates[idx], subject, body_html: bodyHtml };
-      }
-
-      close();
-      showToast('Template salvato');
-      rerenderTemplates();
+          close();
+          showToast('Template salvato');
+          renderFull();
+          bindEvents();
+        });
     });
   }
 };
 
-// ── HTML fragments ──
+// ── HTML ──
 
 function loadingShell(): string {
   return `
@@ -218,7 +189,6 @@ function smtpSection(): string {
     <div class="bg-white rounded-2xl border border-amia-100 p-6 mb-6">
       <h2 class="text-sm font-semibold text-amia-950 mb-1">Configurazione SMTP</h2>
       <p class="text-xs text-amia-400 mb-5">Configura il server per l'invio delle email automatiche.</p>
-
       <div class="grid grid-cols-2 gap-4">
         ${smtpField('smtp-host',      'Host SMTP',      'smtp.gmail.com',         'text')}
         ${smtpField('smtp-port',      'Porta',          '587',                    'number')}
@@ -227,7 +197,6 @@ function smtpSection(): string {
         ${smtpField('smtp-from',      'Email mittente', 'noreply@amia.technology','email')}
         ${smtpField('smtp-from-name', 'Nome mittente',  'Amia Recruiting',        'text')}
       </div>
-
       <div class="flex items-center gap-3 mt-5">
         <button id="save-smtp-btn"
           class="bg-amia-950 text-white px-5 py-2.5 rounded-xl text-sm font-medium
@@ -239,9 +208,7 @@ function smtpSection(): string {
                  hover:bg-amia-50 transition-colors">
           Invia email di test
         </button>
-        <p class="text-[11px] text-amia-400 ml-2">
-          ℹ️ Richiede Edge Functions per l'invio reale.
-        </p>
+        <p class="text-[11px] text-amia-400 ml-2">ℹ️ Richiede Edge Functions.</p>
       </div>
     </div>
   `;
@@ -275,11 +242,7 @@ function placeholderReference(): string {
 
 function templateCard(t: EmailTemplate): string {
   const label = TRIGGER_LABELS[t.trigger] ?? t.trigger;
-  const bodyPreview = t.body_html
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 120);
+  const bodyPreview = t.body_html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
 
   return `
     <div class="bg-white rounded-2xl border border-amia-100 p-5">
@@ -293,9 +256,7 @@ function templateCard(t: EmailTemplate): string {
           <p class="text-xs text-amia-400 line-clamp-2">${escapeText(bodyPreview)}${bodyPreview.length >= 120 ? '…' : ''}</p>
         </div>
         <button class="edit-template-btn p-2 rounded-lg text-amia-400 hover:text-amia-600 hover:bg-amia-50 transition-colors shrink-0 ml-4"
-                data-id="${t.id}" title="Modifica">
-          ${iconEdit}
-        </button>
+                data-id="${t.id}" title="Modifica">${iconEdit}</button>
       </div>
     </div>
   `;
@@ -309,7 +270,6 @@ function renderTemplateModal(t: EmailTemplate, label: string): string {
           <span class="text-[11px] font-mono text-amia-400 bg-amia-50 px-2 py-0.5 rounded">${t.trigger}</span>
           <h3 class="text-lg font-semibold text-amia-950">${label}</h3>
         </div>
-
         <div class="space-y-4">
           <div>
             <label class="block text-xs font-medium text-amia-600 mb-1.5">Oggetto</label>
@@ -329,17 +289,9 @@ function renderTemplateModal(t: EmailTemplate, label: string): string {
             </div>
           </div>
         </div>
-
         <div class="flex items-center gap-3 mt-6 pt-4 border-t border-amia-100">
-          <button id="save-tpl-btn"
-            class="bg-amia-950 text-white px-5 py-2.5 rounded-xl text-sm font-medium
-                   hover:bg-amia-900 active:scale-[0.98] transition-all">
-            Salva template
-          </button>
-          <button id="cancel-tpl-btn"
-            class="px-5 py-2.5 rounded-xl text-sm font-medium text-amia-600 hover:bg-amia-50 transition-colors">
-            Annulla
-          </button>
+          <button id="save-tpl-btn" class="bg-amia-950 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-amia-900 active:scale-[0.98] transition-all">Salva template</button>
+          <button id="cancel-tpl-btn" class="px-5 py-2.5 rounded-xl text-sm font-medium text-amia-600 hover:bg-amia-50 transition-colors">Annulla</button>
         </div>
       </div>
     </div>
@@ -348,16 +300,9 @@ function renderTemplateModal(t: EmailTemplate, label: string): string {
 
 function renderPreview(bodyHtml: string): string {
   let out = bodyHtml;
-  for (const [tag, value] of Object.entries(PREVIEW_VALUES)) {
-    out = out.split(tag).join(value);
-  }
+  for (const [tag, value] of Object.entries(PREVIEW_VALUES)) out = out.split(tag).join(value);
   return out;
 }
 
-function escapeAttr(s: string): string {
-  return s.replace(/"/g, '&quot;').replace(/</g, '&lt;');
-}
-
-function escapeText(s: string): string {
-  return s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+function escapeAttr(s: string): string { return s.replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+function escapeText(s: string): string { return s.replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

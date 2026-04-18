@@ -1,19 +1,13 @@
 /**
- * Amia ATS — Entry point.
- *
- * Auth flow:
- *   - initAuth() loads the session before routing starts
- *   - /login uses `null` as wrapper (no sidebar)
- *   - All other routes use createSidebarWrapper as default wrapper,
- *     which redirects to /login if unauthenticated and shows "access denied"
- *     if the user isn't an admin
+ * App entry — wires routes and boots.
  */
 
-import { Router } from './router';
-import { initAuth, isAuthenticated } from './lib/auth';
-import { createSidebarWrapper } from './layouts/sidebar-layout';
+import './style.css';
 
-// Page factories
+import { Router } from './router';
+import { initAuth, isAuthenticated, isAdmin } from './lib/auth';
+import { renderSidebarLayout } from './layouts/sidebar-layout';
+
 import { createLoginPage } from './pages/login';
 import { createDashboardPage } from './pages/dashboard-overview';
 import { createPositionsListPage } from './pages/positions-list';
@@ -24,60 +18,44 @@ import { createApplicationsListPage } from './pages/applications-list';
 import { createApplicationDetailPage } from './pages/application-detail';
 import { createSettingsPage } from './pages/settings';
 
-const root = document.getElementById('app');
-if (!root) throw new Error('#app element not found');
+const app = document.getElementById('app')!;
+const router = new Router(app);
 
-const router = new Router(root);
-
-// Default wrapper for all authed admin pages
-router.setDefaultWrapper(createSidebarWrapper());
-
-// ── Routes ──
-
-// Login has no wrapper (pass `null` to skip the default sidebar)
-router.on('/login', createLoginPage, null);
-
-// Admin pages (use default sidebar wrapper)
-router.on('/dashboard', createDashboardPage);
-
-router.on('/positions', createPositionsListPage);
-router.on('/positions/new', createPositionFormPage);
-router.on('/positions/:id/edit', createPositionFormPage);
-
-router.on('/quizzes', createQuizzesListPage);
-router.on('/quizzes/new', createQuizEditorPage);
-router.on('/quizzes/:id/edit', createQuizEditorPage);
-
-router.on('/applications', createApplicationsListPage);
-router.on('/applications/:id', createApplicationDetailPage);
-
-router.on('/settings', createSettingsPage);
-
-// ── Fallback ──
-
-router.onFallback(() => {
-  const target = isAuthenticated() ? '/dashboard' : '/login';
-  if (router.currentPath !== target) {
-    router.navigate(target);
-  } else {
+// Default wrapper: sidebar layout + auth gate. Returns null if user should be redirected.
+router.setDefaultWrapper(({ root, router, disposers }) => {
+  if (!isAuthenticated()) {
+    router.navigate('/login');
+    return null;
+  }
+  if (!isAdmin()) {
     root.innerHTML = `
       <div class="min-h-screen flex items-center justify-center bg-amia-50">
-        <div class="text-center max-w-sm px-6">
-          <p class="text-amia-950 text-lg font-semibold mb-2">Pagina non trovata</p>
-          <p class="text-amia-400 text-sm">
-            La route <code class="bg-amia-100 px-1.5 py-0.5 rounded text-xs">${router.currentPath}</code> non esiste.
-          </p>
+        <div class="text-center">
+          <p class="text-amia-950 text-lg font-semibold mb-2">Accesso negato</p>
+          <p class="text-amia-400 text-sm">Non hai i permessi per accedere a questa sezione.</p>
         </div>
       </div>
     `;
+    return null;
   }
+  return renderSidebarLayout(root, router, disposers);
 });
 
-// ── Startup ──
+// Routes
+router
+  .on('/login', createLoginPage, null)
+  .on('/dashboard', createDashboardPage)
+  .on('/positions', createPositionsListPage)
+  .on('/positions/new', createPositionFormPage)
+  .on('/positions/:id/edit', createPositionFormPage)
+  .on('/applications', createApplicationsListPage)
+  .on('/applications/:id', createApplicationDetailPage)
+  .on('/quizzes', createQuizzesListPage)
+  .on('/quizzes/new', createQuizEditorPage)
+  .on('/quizzes/:id/edit', createQuizEditorPage)
+  .on('/settings', createSettingsPage)
+  .onFallback(() => {
+    router.navigate(isAuthenticated() ? '/dashboard' : '/login');
+  });
 
-async function start() {
-  await initAuth();
-  router.start();
-}
-
-start();
+initAuth().then(() => router.start());

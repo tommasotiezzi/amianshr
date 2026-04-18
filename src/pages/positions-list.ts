@@ -1,11 +1,5 @@
 /**
- * Positions list — PageFactory.
- *
- * Shows all positions with status filter, application count per position,
- * and quick actions (edit, view applications).
- *
- * State lives in closure scope — fresh per navigation.
- * Filter persists via query string (?filter=published) for shareable URLs.
+ * Positions list — sync mount.
  */
 
 import type { PageFactory } from '../lib/page';
@@ -31,62 +25,67 @@ const FILTERS: { key: FilterKey; label: string }[] = [
 ];
 
 export const createPositionsListPage: PageFactory = (ctx) => {
-  // Closure state — fresh every mount
   let positions: q.PositionWithCount[] = [];
   let currentFilter: FilterKey = (ctx.query.filter as FilterKey) || 'all';
 
-  return {
-    async mount() {
-      // Initial shell (so header shows immediately, list swaps in once loaded)
-      ctx.container.innerHTML = shellHtml('Caricamento...');
+  // 1. Shell immediately
+  ctx.container.innerHTML = shellHtml('Caricamento...');
 
-      const res = await q.fetchPositions({ signal: ctx.signal });
+  // 2. Fire fetch in background
+  q.fetchPositions({ signal: ctx.signal })
+    .then((res) => {
       if (ctx.signal.aborted) return;
-
       if (res.error) {
         showToast('Errore nel caricamento delle posizioni', 'error');
         ctx.container.innerHTML = shellHtml('Errore nel caricamento');
         return;
       }
-
       positions = res.data!;
       renderFull();
-    },
-  };
+    })
+    .catch((err) => {
+      if (ctx.signal.aborted) return;
+      console.error('[positions-list]', err);
+    });
 
   // ── Render ──
 
   function renderFull() {
     ctx.container.innerHTML = `
       <div class="p-8 max-w-5xl mx-auto">
-
-        <!-- Header -->
         <div class="flex items-center justify-between mb-8">
           <div>
             <h1 class="text-2xl font-semibold text-amia-950 tracking-tight">Posizioni</h1>
             <p class="text-amia-500 text-sm mt-1">${positions.length} posizioni totali</p>
           </div>
-          <a
-            href="#/positions/new"
+          <a href="#/positions/new"
             class="inline-flex items-center gap-2 bg-amia-950 text-white px-4 py-2.5 rounded-xl
-                   text-sm font-medium hover:bg-amia-900 active:scale-[0.98] transition-all"
-          >
+                   text-sm font-medium hover:bg-amia-900 active:scale-[0.98] transition-all">
             ${iconPlus} Nuova posizione
           </a>
         </div>
 
-        <!-- Filters -->
-        <div class="flex items-center gap-2 mb-6" data-filters>
+        <div class="flex items-center gap-2 mb-6">
           ${FILTERS.map((f) => filterBtnHtml(f.key, f.label, currentFilter)).join('')}
         </div>
 
-        <!-- List (updated in place when filter changes) -->
         <div class="space-y-3" data-list></div>
       </div>
     `;
 
     renderList();
-    bindFilters();
+
+    ctx.$$<HTMLButtonElement>('[data-filter]').forEach((btn) => {
+      ctx.on(btn, 'click', () => {
+        const f = btn.dataset.filter as FilterKey;
+        if (f === currentFilter) return;
+        currentFilter = f;
+        ctx.$$<HTMLButtonElement>('[data-filter]').forEach((b) => {
+          b.className = filterBtnClasses(b.dataset.filter === currentFilter);
+        });
+        renderList();
+      });
+    });
   }
 
   function renderList() {
@@ -108,25 +107,9 @@ export const createPositionsListPage: PageFactory = (ctx) => {
 
     listEl.innerHTML = filtered.map(positionCard).join('');
   }
-
-  function bindFilters() {
-    ctx.$$<HTMLButtonElement>('[data-filter]').forEach((btn) => {
-      ctx.on(btn, 'click', () => {
-        const f = btn.dataset.filter as FilterKey;
-        if (f === currentFilter) return;
-        currentFilter = f;
-        // Update the filter buttons' visual state without rebuilding the whole page
-        ctx.$$<HTMLButtonElement>('[data-filter]').forEach((b) => {
-          const active = b.dataset.filter === currentFilter;
-          b.className = filterBtnClasses(active);
-        });
-        renderList();
-      });
-    });
-  }
 };
 
-// ── HTML fragments ──
+// ── HTML ──
 
 function shellHtml(statusLine: string): string {
   return `
@@ -151,13 +134,7 @@ function filterBtnClasses(active: boolean): string {
 }
 
 function filterBtnHtml(key: FilterKey, label: string, current: FilterKey): string {
-  const active = key === current;
-  return `
-    <button
-      class="${filterBtnClasses(active)}"
-      data-filter="${key}"
-    >${label}</button>
-  `;
+  return `<button class="${filterBtnClasses(key === current)}" data-filter="${key}">${label}</button>`;
 }
 
 function positionCard(p: q.PositionWithCount): string {
@@ -200,9 +177,7 @@ function positionCard(p: q.PositionWithCount): string {
         ${p.published_at
           ? `<span class="text-xs text-amia-400">Pubblicata il ${formatDate(p.published_at)}</span>`
           : ''}
-        ${quizBadges
-          ? `<span class="text-xs text-accent font-medium">${quizBadges}</span>`
-          : ''}
+        ${quizBadges ? `<span class="text-xs text-accent font-medium">${quizBadges}</span>` : ''}
       </div>
     </div>
   `;

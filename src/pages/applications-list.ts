@@ -1,16 +1,5 @@
 /**
- * Applications list — PageFactory.
- *
- * Shows all applications in a sortable table with:
- *   - Candidate + position
- *   - Logic / Skills quiz score chips
- *   - Attitudinal completion chip
- *   - Composite score (ICP match %) — NEW
- *   - Status badge
- *   - Date
- *
- * Filters: status pipeline + search (candidate name/email or position title).
- * Filter + search are local — data is fetched once on mount.
+ * Applications list — sync mount.
  */
 
 import type { PageFactory } from '../lib/page';
@@ -36,44 +25,38 @@ const STATUS_FILTERS: { value: FilterKey; label: string }[] = [
 ];
 
 export const createApplicationsListPage: PageFactory = (ctx) => {
-  // Closure state
   let applications: q.ApplicationRow[] = [];
   let currentFilter: FilterKey = (ctx.query.filter as FilterKey) || 'all';
   let searchQuery: string = ctx.query.search ?? '';
 
-  return {
-    async mount() {
-      ctx.container.innerHTML = loadingShell();
+  ctx.container.innerHTML = loadingShell();
 
-      const res = await q.fetchApplications({ signal: ctx.signal });
+  q.fetchApplications({ signal: ctx.signal })
+    .then((res) => {
       if (ctx.signal.aborted) return;
-
       if (res.error) {
         showToast('Errore nel caricamento', 'error');
         ctx.container.innerHTML = errorShell();
         return;
       }
-
       applications = res.data!;
       renderFull();
-    },
-  };
-
-  // ── Render ──
+    })
+    .catch((err) => {
+      if (ctx.signal.aborted) return;
+      console.error('[applications-list]', err);
+    });
 
   function renderFull() {
     ctx.container.innerHTML = `
       <div class="p-8 max-w-6xl mx-auto">
-
-        <!-- Header -->
         <div class="mb-8">
           <h1 class="text-2xl font-semibold text-amia-950 tracking-tight">Candidature</h1>
           <p class="text-amia-500 text-sm mt-1">${applications.length} candidature totali</p>
         </div>
 
-        <!-- Filters + search -->
         <div class="flex items-center justify-between gap-4 mb-6 flex-wrap">
-          <div class="flex items-center gap-2" data-status-filters>
+          <div class="flex items-center gap-2">
             ${STATUS_FILTERS.map((f) => statusFilterBtn(f.value, f.label, currentFilter)).join('')}
           </div>
           <div class="relative flex-1 max-w-xs">
@@ -86,7 +69,6 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
           </div>
         </div>
 
-        <!-- Table (updated in place on filter/search change) -->
         <div data-list></div>
       </div>
     `;
@@ -135,7 +117,6 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
       </div>
     `;
 
-    // Row navigation
     ctx.$$<HTMLElement>('.app-row').forEach((row) => {
       ctx.on(row, 'click', () => {
         const id = row.dataset.id;
@@ -163,25 +144,19 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
     return out;
   }
 
-  // ── Events ──
-
   function bindEvents() {
-    // Status filter buttons
     ctx.$$<HTMLButtonElement>('[data-status-filter]').forEach((btn) => {
       ctx.on(btn, 'click', () => {
         const f = btn.dataset.statusFilter as FilterKey;
         if (f === currentFilter) return;
         currentFilter = f;
-        // Update button styles
         ctx.$$<HTMLButtonElement>('[data-status-filter]').forEach((b) => {
-          const active = b.dataset.statusFilter === currentFilter;
-          b.className = statusFilterClasses(active);
+          b.className = statusFilterClasses(b.dataset.statusFilter === currentFilter);
         });
         renderList();
       });
     });
 
-    // Search input (debounced)
     const searchInput = ctx.$<HTMLInputElement>('#search-input');
     let searchTimer: ReturnType<typeof setTimeout> | null = null;
     ctx.on(searchInput, 'input', () => {
@@ -196,7 +171,7 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
   }
 };
 
-// ── HTML fragments ──
+// ── HTML ──
 
 function loadingShell(): string {
   return `
@@ -230,12 +205,7 @@ function statusFilterClasses(active: boolean): string {
 }
 
 function statusFilterBtn(key: FilterKey, label: string, current: FilterKey): string {
-  return `
-    <button
-      class="${statusFilterClasses(key === current)}"
-      data-status-filter="${key}"
-    >${label}</button>
-  `;
+  return `<button class="${statusFilterClasses(key === current)}" data-status-filter="${key}">${label}</button>`;
 }
 
 function applicationRow(a: q.ApplicationRow): string {
@@ -249,37 +219,20 @@ function applicationRow(a: q.ApplicationRow): string {
         <p class="text-sm text-amia-700">${escapeText(a.position.title)}</p>
         <p class="text-xs text-amia-400">${escapeText(a.position.department)}</p>
       </td>
-      <td class="px-3 py-3.5 text-center">
-        ${quizChip(a.pre_quiz_completed_at, a.pre_quiz_score, a.pre_quiz_max_score, a.pre_quiz_over_time)}
-      </td>
-      <td class="px-3 py-3.5 text-center">
-        ${quizChip(a.post_quiz_completed_at, a.post_quiz_score, a.post_quiz_max_score, a.post_quiz_over_time)}
-      </td>
-      <td class="px-3 py-3.5 text-center">
-        ${attChip(a.att_quiz_completed_at)}
-      </td>
-      <td class="px-3 py-3.5 text-center">
-        ${compositeChip(a.composite_score)}
-      </td>
-      <td class="px-5 py-3.5">
-        ${applicationStatusBadge(a.status)}
-      </td>
+      <td class="px-3 py-3.5 text-center">${quizChip(a.pre_quiz_completed_at, a.pre_quiz_score, a.pre_quiz_max_score, a.pre_quiz_over_time)}</td>
+      <td class="px-3 py-3.5 text-center">${quizChip(a.post_quiz_completed_at, a.post_quiz_score, a.post_quiz_max_score, a.post_quiz_over_time)}</td>
+      <td class="px-3 py-3.5 text-center">${attChip(a.att_quiz_completed_at)}</td>
+      <td class="px-3 py-3.5 text-center">${compositeScoreDisplay(a.composite_score)}</td>
+      <td class="px-5 py-3.5">${applicationStatusBadge(a.status)}</td>
       <td class="px-5 py-3.5 text-right">
         <span class="text-xs text-amia-400">${timeAgo(a.created_at)}</span>
       </td>
-      <td class="pr-4">
-        <span class="text-amia-300">${iconChevronRight}</span>
-      </td>
+      <td class="pr-4"><span class="text-amia-300">${iconChevronRight}</span></td>
     </tr>
   `;
 }
 
-function quizChip(
-  completed: string | null,
-  score: number | null,
-  max: number | null,
-  overTime: boolean,
-): string {
+function quizChip(completed: string | null, score: number | null, max: number | null, overTime: boolean): string {
   if (!completed) return '<span class="text-amia-300 text-xs">—</span>';
   const pct = max ? Math.round(((score ?? 0) / max) * 100) : 0;
   return `
@@ -293,14 +246,5 @@ function attChip(completed: string | null): string {
   return '<span class="text-emerald-600 text-xs font-medium">✓</span>';
 }
 
-function compositeChip(composite: number | null): string {
-  return compositeScoreDisplay(composite);
-}
-
-function escapeAttr(s: string): string {
-  return s.replace(/"/g, '&quot;').replace(/</g, '&lt;');
-}
-
-function escapeText(s: string): string {
-  return s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+function escapeAttr(s: string): string { return s.replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+function escapeText(s: string): string { return s.replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

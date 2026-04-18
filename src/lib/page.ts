@@ -1,60 +1,70 @@
 /**
- * Page lifecycle contract.
+ * Page lifecycle — the factory IS the mount.
  *
- * Every page is a factory that returns a Page object. The factory is called
- * ONCE per navigation — state lives in closures, not module-level vars.
+ * A PageFactory is called by the router at mount time. It must:
+ *   1. Set container.innerHTML to a loading shell IMMEDIATELY
+ *   2. Kick off async work (fetches) in the background
+ *   3. Return synchronously — with an optional unmount handle
  *
- * Usage:
- *   export const createPositionsListPage: PageFactory = (ctx) => {
- *     let currentFilter: PositionStatus | 'all' = 'all';
+ * The async work updates the DOM when it resolves, guarded by ctx.signal.aborted.
  *
- *     return {
- *       async mount() {
- *         const { data } = await ctx.supabase.from('positions').select('*');
- *         if (ctx.signal.aborted) return;  // stale fetch
- *         ctx.container.innerHTML = render(data, currentFilter);
- *         ctx.on(ctx.$('.filter-btn'), 'click', (e) => { ... });
- *       },
- *       // unmount is auto-generated from ctx.on() disposers; only define
- *       // it if you need to clear timers / subscriptions manually.
- *     };
+ * This means:
+ *   - Navigation is instant — no blocked router
+ *   - Stuck fetches (tab throttling, network drops) can never stall navigation
+ *   - If the user navigates away during a pending fetch, the old fetch resolves
+ *     into a detached DOM or early-returns because signal.aborted is true
+ *
+ * Example page:
+ *
+ *   export const createFooPage: PageFactory = (ctx) => {
+ *     ctx.container.innerHTML = loadingShell();
+ *
+ *     q.fetchFoo({ signal: ctx.signal })
+ *       .then(res => {
+ *         if (ctx.signal.aborted) return;
+ *         if (res.error) { showError(); return; }
+ *         renderFull(res.data);
+ *         bindEvents();
+ *       });
+ *
+ *     // Optional: return { unmount() { ... } } for explicit cleanup
+ *     // Most pages don't need this — auto-cleanup handles listeners/timers.
  *   };
  */
 
 import type { Router } from '../router';
 
-export interface Page {
-  mount(): void | Promise<void>;
-  unmount?(): void;
-}
-
 export interface PageContext {
-  /** The DOM element to render into. */
   container: HTMLElement;
-  /** Route params (e.g. { id: 'abc123' }). */
   params: Record<string, string>;
-  /** Query string params (e.g. { filter: 'published' }). */
   query: Record<string, string>;
-  /** Router instance for navigation. */
   router: Router;
-  /** AbortSignal that fires when the page is unmounted. Pass to fetch() etc. */
   signal: AbortSignal;
-  /**
-   * Attach an event listener that auto-cleans on unmount.
-   * Returns a manual disposer if you need to remove it sooner.
-   */
+
+  /** Add a DOM event listener that's auto-removed on unmount. */
   on<K extends keyof HTMLElementEventMap>(
-    target: HTMLElement | null | undefined,
+    target: HTMLElement | Document | Window | null | undefined,
     event: K,
     handler: (ev: HTMLElementEventMap[K]) => void,
     options?: AddEventListenerOptions,
-  ): () => void;
-  /** Scoped query selector — looks inside container only. */
+  ): void;
+
+  /** Query a single element scoped to this page's container. */
   $<T extends HTMLElement = HTMLElement>(selector: string): T | null;
-  /** Scoped query selector all — looks inside container only. */
+
+  /** Query all matching elements scoped to this page's container. */
   $$<T extends HTMLElement = HTMLElement>(selector: string): T[];
-  /** Register arbitrary cleanup (timers, subscriptions, etc.) — fires on unmount. */
+
+  /** Register a cleanup function to run on unmount. */
   onCleanup(fn: () => void): void;
 }
 
-export type PageFactory = (ctx: PageContext) => Page;
+/**
+ * Optional handle returned by a page factory. Most pages return nothing
+ * (void) and rely on auto-cleanup via ctx.on / ctx.onCleanup.
+ */
+export interface PageHandle {
+  unmount?(): void;
+}
+
+export type PageFactory = (ctx: PageContext) => PageHandle | void;

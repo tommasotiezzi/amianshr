@@ -1,11 +1,5 @@
 /**
- * Position form — PageFactory.
- *
- * Handles create + edit modes. Includes the ICP Builder: 11 axis sliders
- * (target 1-5 + weight 0-5 per axis) saved to positions.icp_config.
- *
- * ICP section is collapsible to keep the form manageable. Summary line
- * shows how many axes are configured when collapsed.
+ * Position form — sync mount, with ICP builder.
  */
 
 import type { PageFactory } from '../lib/page';
@@ -13,19 +7,9 @@ import { supabase } from '../lib/supabase-client';
 import * as q from '../lib/queries';
 import { showToast } from '../lib/toast';
 import {
-  AXES,
-  AXIS_LABELS,
-  type AxisType,
-  type ContractType,
-  type IcpConfig,
-  type Position,
-  type PositionStatus,
-  type Quiz,
+  AXES, AXIS_LABELS,
+  type AxisType, type Position, type PositionStatus, type ContractType, type Quiz,
 } from '../lib/database-types';
-
-// ── Static config ──
-
-const DEPARTMENTS = ['Engineering', 'Design', 'Marketing', 'Sales', 'Operations', 'HR', 'Product'];
 
 const CONTRACT_TYPES: { value: ContractType; label: string }[] = [
   { value: 'full_time',  label: 'Full-time' },
@@ -41,485 +25,255 @@ const STATUSES: { value: PositionStatus; label: string }[] = [
   { value: 'archived',  label: 'Archiviata' },
 ];
 
-/**
- * ICP presets — placeholders for now. Fill these with real values based on
- * the framework doc (Team MVP, Team Algo, Marketing/Growth).
- */
-const ICP_PRESETS: { key: string; label: string; config: IcpConfig }[] = [
-  { key: 'custom',   label: 'Personalizzato', config: {} },
-  { key: 'mvp',      label: 'Team MVP',       config: {} },
-  { key: 'algo',     label: 'Team Algo',      config: {} },
-  { key: 'growth',   label: 'Marketing / Growth', config: {} },
-];
-
-// ── Factory ──
+type IcpRow = { target: number; weight: number };
+type IcpConfig = Partial<Record<AxisType, IcpRow>>;
 
 export const createPositionFormPage: PageFactory = (ctx) => {
   const isEdit = !!ctx.params.id;
   const positionId = ctx.params.id ?? '';
 
-  let position: Position | null = null;
-  let quizzes: Pick<Quiz, 'id' | 'title' | 'quiz_type'>[] = [];
-  let icpConfig: IcpConfig = {};
-  let isSaving = false;
-  let isIcpOpen = isEdit;  // expanded by default when editing
-
-  return {
-    async mount() {
-      ctx.container.innerHTML = loadingShell();
-
-      // Fetch position (if editing) + quizzes
-      const [positionRes, quizzesRes] = await Promise.all([
-        isEdit ? q.fetchPosition(positionId, { signal: ctx.signal }) : Promise.resolve(null),
-        q.fetchQuizzesMinimal({ signal: ctx.signal }),
-      ]);
-      if (ctx.signal.aborted) return;
-
-      if (positionRes && positionRes.error) {
-        showToast('Posizione non trovata', 'error');
-        ctx.router.navigate('/positions');
-        return;
-      }
-      if (quizzesRes.error) {
-        showToast('Errore nel caricamento dei quiz', 'error');
-        return;
-      }
-
-      position = positionRes ? positionRes.data : null;
-      quizzes = quizzesRes.data!;
-      icpConfig = (position?.icp_config as IcpConfig) ?? {};
-
-      renderForm();
-      bindFormEvents();
-      bindIcpEvents();
-      bindDeleteButton();
-    },
+  let position: Partial<Position> = isEdit ? {} : {
+    title: '', description: '', department: '', contract_type: 'full_time',
+    location: '', salary_min: null, salary_max: null, status: 'draft',
+    pre_quiz_id: null, post_quiz_id: null, att_quiz_id: null, icp_config: {},
   };
+  let quizzes: Quiz[] = [];
+  let icp: IcpConfig = (position.icp_config as IcpConfig) ?? {};
+  let isSaving = false;
 
-  // ── Render ──
+  ctx.container.innerHTML = loadingShell();
 
-  function renderForm() {
+  const fetches = isEdit
+    ? Promise.all([q.fetchPosition(positionId, { signal: ctx.signal }), q.fetchQuizzes({ signal: ctx.signal })])
+    : Promise.all([Promise.resolve({ data: null, error: null }), q.fetchQuizzes({ signal: ctx.signal })]);
+
+  fetches.then(([posRes, quizRes]: any[]) => {
+    if (ctx.signal.aborted) return;
+    if (isEdit && (posRes.error || !posRes.data)) {
+      showToast('Posizione non trovata', 'error');
+      ctx.router.navigate('/positions');
+      return;
+    }
+    if (quizRes.error) {
+      showToast('Errore nel caricamento dei quiz', 'error');
+    }
+    if (isEdit) {
+      position = posRes.data;
+      icp = (position.icp_config as IcpConfig) ?? {};
+    }
+    quizzes = quizRes.data ?? [];
+    renderFull();
+    bindEvents();
+  }).catch((err) => {
+    if (ctx.signal.aborted) return;
+    console.error('[position-form]', err);
+  });
+
+  function renderFull() {
+    const preQuizzes  = quizzes.filter((q) => q.quiz_type === 'logic');
+    const postQuizzes = quizzes.filter((q) => q.quiz_type === 'skills');
+    const attQuizzes  = quizzes.filter((q) => q.quiz_type === 'attitudinal');
+
     ctx.container.innerHTML = `
       <div class="p-8 max-w-3xl mx-auto">
-
-        <a href="#/positions" class="text-xs text-amia-400 hover:text-amia-600 transition-colors mb-3 inline-block">
-          ← Torna alle posizioni
-        </a>
-
-        <div class="flex items-center justify-between mb-8">
-          <h1 class="text-2xl font-semibold text-amia-950 tracking-tight">
-            ${isEdit ? 'Modifica posizione' : 'Nuova posizione'}
-          </h1>
-          ${isEdit ? `
-            <select id="status-select"
-              class="px-3 py-1.5 rounded-lg text-xs font-medium border border-amia-200 bg-white text-amia-700">
-              ${STATUSES.map((s) => `
-                <option value="${s.value}" ${position?.status === s.value ? 'selected' : ''}>${s.label}</option>
-              `).join('')}
-            </select>
-          ` : ''}
-        </div>
+        <a href="#/positions" class="text-xs text-amia-400 hover:text-amia-600 transition-colors mb-3 inline-block">← Torna alle posizioni</a>
+        <h1 class="text-2xl font-semibold text-amia-950 tracking-tight mb-8">${isEdit ? 'Modifica posizione' : 'Nuova posizione'}</h1>
 
         <form id="position-form" class="space-y-6">
-
           <!-- Title -->
-          <div>
-            <label class="block text-xs font-medium text-amia-600 mb-1.5">Titolo *</label>
-            <input type="text" name="title" required
-              value="${escapeAttr(position?.title ?? '')}"
-              placeholder="es. Frontend Developer"
-              class="w-full px-4 py-3 rounded-xl border border-amia-200 text-sm
-                     text-amia-900 placeholder:text-amia-300" />
-          </div>
+          ${fieldWrap('Titolo *', `<input type="text" name="title" required value="${escapeAttr(position.title ?? '')}" placeholder="es. Senior Data Analyst" class="${inputCls}" />`)}
 
           <!-- Description -->
-          <div>
-            <label class="block text-xs font-medium text-amia-600 mb-1.5">Descrizione *</label>
-            <textarea name="description" required rows="6"
-              placeholder="Descrivi il ruolo, le responsabilità e i requisiti..."
-              class="w-full px-4 py-3 rounded-xl border border-amia-200 text-sm
-                     text-amia-900 placeholder:text-amia-300 resize-none"
-            >${escapeText(position?.description ?? '')}</textarea>
-          </div>
+          ${fieldWrap('Descrizione *', `<textarea name="description" rows="4" required class="${inputCls} resize-none">${escapeText(position.description ?? '')}</textarea>`)}
 
-          <!-- Department + Contract -->
+          <!-- Dept + Contract -->
           <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="block text-xs font-medium text-amia-600 mb-1.5">Dipartimento *</label>
-              <select name="department" required
-                class="w-full px-4 py-3 rounded-xl border border-amia-200 text-sm text-amia-900 bg-white">
-                <option value="">Seleziona...</option>
-                ${DEPARTMENTS.map((d) => `
-                  <option value="${d}" ${position?.department === d ? 'selected' : ''}>${d}</option>
-                `).join('')}
+            ${fieldWrap('Dipartimento *', `<input type="text" name="department" required value="${escapeAttr(position.department ?? '')}" placeholder="Engineering, Design, Marketing..." class="${inputCls}" />`)}
+            ${fieldWrap('Tipo contratto *', `
+              <select name="contract_type" required class="${inputCls} bg-white">
+                ${CONTRACT_TYPES.map((c) => `<option value="${c.value}" ${position.contract_type === c.value ? 'selected' : ''}>${c.label}</option>`).join('')}
               </select>
-            </div>
-            <div>
-              <label class="block text-xs font-medium text-amia-600 mb-1.5">Tipo contratto *</label>
-              <select name="contract_type" required
-                class="w-full px-4 py-3 rounded-xl border border-amia-200 text-sm text-amia-900 bg-white">
-                ${CONTRACT_TYPES.map((c) => `
-                  <option value="${c.value}" ${position?.contract_type === c.value ? 'selected' : ''}>${c.label}</option>
-                `).join('')}
-              </select>
-            </div>
+            `)}
           </div>
 
           <!-- Location -->
-          <div>
-            <label class="block text-xs font-medium text-amia-600 mb-1.5">Sede *</label>
-            <input type="text" name="location" required
-              value="${escapeAttr(position?.location ?? '')}"
-              placeholder="es. Remoto, Milano, Darfo Boario Terme"
-              class="w-full px-4 py-3 rounded-xl border border-amia-200 text-sm
-                     text-amia-900 placeholder:text-amia-300" />
-          </div>
+          ${fieldWrap('Sede *', `<input type="text" name="location" required value="${escapeAttr(position.location ?? '')}" placeholder="es. Remoto, Milano" class="${inputCls}" />`)}
 
           <!-- Salary -->
           <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="block text-xs font-medium text-amia-600 mb-1.5">RAL minima (opzionale)</label>
-              <input type="number" name="salary_min"
-                value="${position?.salary_min ?? ''}"
-                placeholder="30000"
-                class="w-full px-4 py-3 rounded-xl border border-amia-200 text-sm
-                       text-amia-900 placeholder:text-amia-300" />
-            </div>
-            <div>
-              <label class="block text-xs font-medium text-amia-600 mb-1.5">RAL massima (opzionale)</label>
-              <input type="number" name="salary_max"
-                value="${position?.salary_max ?? ''}"
-                placeholder="45000"
-                class="w-full px-4 py-3 rounded-xl border border-amia-200 text-sm
-                       text-amia-900 placeholder:text-amia-300" />
-            </div>
+            ${fieldWrap('RAL minima (opzionale)', `<input type="number" name="salary_min" value="${position.salary_min ?? ''}" placeholder="30000" class="${inputCls}" />`)}
+            ${fieldWrap('RAL massima (opzionale)', `<input type="number" name="salary_max" value="${position.salary_max ?? ''}" placeholder="45000" class="${inputCls}" />`)}
           </div>
 
-          <!-- Quizzes -->
-          <div class="space-y-4">
-            <p class="text-xs font-medium text-amia-600">Quiz associati</p>
+          <!-- Quiz -->
+          <div class="space-y-3 pt-2">
+            <p class="text-xs font-semibold text-amia-700 uppercase tracking-wider">Quiz associati</p>
             <div class="grid grid-cols-3 gap-4">
-              ${quizSelectHtml('pre_quiz_id',  'Quiz Logica',   position?.pre_quiz_id,  'logic')}
-              ${quizSelectHtml('post_quiz_id', 'Quiz Skills',   position?.post_quiz_id, 'skills')}
-              ${quizSelectHtml('att_quiz_id',  'Attitudinale',  position?.att_quiz_id,  'attitudinal')}
+              ${quizSelect('Logica (pre)',   'pre_quiz_id',  preQuizzes,  position.pre_quiz_id)}
+              ${quizSelect('Skills (post)',  'post_quiz_id', postQuizzes, position.post_quiz_id)}
+              ${quizSelect('Attitudinale',   'att_quiz_id',  attQuizzes,  position.att_quiz_id)}
             </div>
           </div>
 
-          <!-- ICP Builder -->
-          ${icpSectionHtml()}
+          <!-- ICP -->
+          ${icpSection(icp)}
+
+          <!-- Status -->
+          ${fieldWrap('Stato', `
+            <select name="status" class="${inputCls} bg-white">
+              ${STATUSES.map((s) => `<option value="${s.value}" ${position.status === s.value ? 'selected' : ''}>${s.label}</option>`).join('')}
+            </select>
+          `)}
 
           <!-- Actions -->
-          <div class="flex items-center gap-3 pt-4 border-t border-amia-100">
-            <button type="submit" id="submit-btn"
-              class="bg-amia-950 text-white px-6 py-3 rounded-xl text-sm font-medium
-                     hover:bg-amia-900 active:scale-[0.98] transition-all
-                     flex items-center gap-2">
-              <span id="submit-text">${isEdit ? 'Salva modifiche' : 'Crea posizione'}</span>
-              <div id="submit-spinner" class="spinner hidden"></div>
+          <div class="flex items-center gap-3 pt-2 border-t border-amia-100 mt-8">
+            <button type="submit" class="bg-amia-950 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-amia-900 active:scale-[0.98] transition-all">
+              ${isEdit ? 'Salva modifiche' : 'Crea posizione'}
             </button>
-            <a href="#/positions"
-               class="px-6 py-3 rounded-xl text-sm font-medium text-amia-600 hover:bg-amia-50 transition-colors">
-              Annulla
-            </a>
-            ${isEdit ? `
-              <button type="button" id="delete-btn"
-                class="ml-auto px-4 py-3 rounded-xl text-sm font-medium text-red-600
-                       hover:bg-red-50 transition-colors">
-                Elimina
-              </button>
-            ` : ''}
+            ${isEdit ? `<button type="button" id="delete-btn" class="px-4 py-2.5 rounded-xl text-sm font-medium text-red-600 hover:bg-red-50 transition-colors">Elimina</button>` : ''}
           </div>
         </form>
       </div>
     `;
   }
 
-  function quizSelectHtml(name: string, label: string, currentId: string | null | undefined, filterType: string): string {
-    const options = quizzes.filter((qz) => qz.quiz_type === filterType);
-    return `
-      <div>
-        <label class="block text-[11px] font-medium text-amia-500 mb-1">${label}</label>
-        <select name="${name}"
-          class="w-full px-3 py-2.5 rounded-xl border border-amia-200 text-sm text-amia-900 bg-white">
-          <option value="">Nessuno</option>
-          ${options.map((qz) => `
-            <option value="${qz.id}" ${currentId === qz.id ? 'selected' : ''}>${escapeText(qz.title)}</option>
-          `).join('')}
-        </select>
-      </div>
-    `;
-  }
-
-  // ── ICP section ──
-
-  function icpSectionHtml(): string {
-    const configuredCount = Object.values(icpConfig).filter((c) => c && c.weight > 0).length;
-    const summary = configuredCount > 0
-      ? `${configuredCount} ${configuredCount === 1 ? 'asse configurato' : 'assi configurati'}, ${AXES.length - configuredCount} ignorati`
-      : 'Nessun asse configurato';
-
-    return `
-      <div class="border border-amia-100 rounded-2xl overflow-hidden">
-        <button type="button" id="icp-toggle"
-          class="w-full px-5 py-4 flex items-center justify-between bg-white hover:bg-amia-50/50 transition-colors text-left">
-          <div>
-            <p class="text-sm font-semibold text-amia-950">ICP — Ideal Candidate Profile</p>
-            <p class="text-xs text-amia-400 mt-0.5">${summary}</p>
-          </div>
-          <span class="text-amia-400 text-lg" id="icp-chevron">${isIcpOpen ? '▾' : '▸'}</span>
-        </button>
-
-        <div id="icp-body" class="${isIcpOpen ? '' : 'hidden'} px-5 pb-5 pt-1 border-t border-amia-50 bg-amia-50/30">
-          <div class="flex items-center gap-3 mb-5 mt-4">
-            <label class="text-xs font-medium text-amia-600 shrink-0">Preset:</label>
-            <select id="icp-preset"
-              class="px-3 py-2 rounded-lg border border-amia-200 text-xs text-amia-900 bg-white">
-              ${ICP_PRESETS.map((p) => `<option value="${p.key}">${p.label}</option>`).join('')}
-            </select>
-            <p class="text-[11px] text-amia-400">
-              Target = punteggio desiderato (1-5). Peso = importanza (0 = ignora).
-            </p>
-          </div>
-
-          <div class="space-y-2" id="icp-sliders">
-            ${AXES.map((axis) => axisRowHtml(axis, icpConfig[axis])).join('')}
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-function axisRowHtml(axis: AxisType, cfg: { target: number; weight: number } | undefined): string {
-  const target = cfg?.target ?? 3;
-  const weight = cfg?.weight ?? 0;
-  const isActive = weight > 0;
-  return `
-    <div class="axis-row flex items-center gap-5 py-2.5 px-3 rounded-xl bg-white border border-amia-50
-                ${isActive ? '' : 'opacity-50'}" data-axis="${axis}">
-
-      <!-- Axis name -->
-      <div class="flex-1 min-w-0">
-        <p class="text-xs font-medium text-amia-900 truncate">${AXIS_LABELS[axis]}</p>
-      </div>
-
-      <!-- Target slider -->
-      <div class="flex items-center gap-2 w-44 shrink-0">
-        <span class="text-[10px] font-medium text-amia-400 w-8 shrink-0">Target</span>
-        <input type="range" min="1" max="5" step="1" value="${target}"
-          data-role="target" data-axis="${axis}"
-          class="flex-1 min-w-0 accent-amia-950" />
-        <span class="text-xs font-semibold text-amia-900 w-4 text-right shrink-0" data-readout="target" data-axis="${axis}">${target}</span>
-      </div>
-
-      <!-- Weight slider -->
-      <div class="flex items-center gap-2 w-44 shrink-0">
-        <span class="text-[10px] font-medium text-amia-400 w-8 shrink-0">Peso</span>
-        <input type="range" min="0" max="5" step="1" value="${weight}"
-          data-role="weight" data-axis="${axis}"
-          class="flex-1 min-w-0 accent-accent" />
-        <span class="text-xs font-semibold text-amia-900 w-4 text-right shrink-0" data-readout="weight" data-axis="${axis}">${weight}</span>
-      </div>
-    </div>
-  `;
-}
-
-  // ── Events ──
-
-  function bindFormEvents() {
-    const form = ctx.$<HTMLFormElement>('#position-form');
-    if (!form) return;
-
-    ctx.on(form, 'submit', async (e) => {
+  function bindEvents() {
+    ctx.on(ctx.$<HTMLFormElement>('#position-form'), 'submit', (e) => {
       e.preventDefault();
-      if (isSaving) return;
-      await handleSubmit(form);
-    });
-  }
-
-  function bindIcpEvents() {
-    // Collapse toggle
-    const toggle = ctx.$<HTMLButtonElement>('#icp-toggle');
-    ctx.on(toggle, 'click', () => {
-      isIcpOpen = !isIcpOpen;
-      const body = ctx.$<HTMLElement>('#icp-body');
-      const chevron = ctx.$<HTMLElement>('#icp-chevron');
-      body?.classList.toggle('hidden', !isIcpOpen);
-      if (chevron) chevron.textContent = isIcpOpen ? '▾' : '▸';
+      handleSubmit();
     });
 
-    // Preset selector
-    const preset = ctx.$<HTMLSelectElement>('#icp-preset');
-    ctx.on(preset, 'change', () => {
-      if (!preset) return;
-      const found = ICP_PRESETS.find((p) => p.key === preset.value);
-      if (!found || found.key === 'custom') return;
-      icpConfig = { ...found.config };
-      refreshIcpSliders();
-    });
-
-    // Sliders (delegated via individual inputs — 22 total, fine)
-    ctx.$$<HTMLInputElement>('#icp-sliders input[type="range"]').forEach((input) => {
+    // ICP target/weight inputs
+    ctx.$$<HTMLInputElement>('.icp-target, .icp-weight').forEach((input) => {
       ctx.on(input, 'input', () => {
         const axis = input.dataset.axis as AxisType;
-        const role = input.dataset.role as 'target' | 'weight';
-        const value = parseInt(input.value, 10);
+        const field = input.classList.contains('icp-target') ? 'target' : 'weight';
+        const value = Number(input.value) || 0;
 
-        // Update the closure state
-        const existing = icpConfig[axis] ?? { target: 3, weight: 0 };
-        icpConfig[axis] = { ...existing, [role]: value };
+        if (!icp[axis]) icp[axis] = { target: 3, weight: 0 };
+        icp[axis]![field] = value;
 
-        // Update the readout
-        const readout = ctx.$<HTMLElement>(`[data-readout="${role}"][data-axis="${axis}"]`);
-        if (readout) readout.textContent = String(value);
-
-        // Update row dimming if weight changed
-        if (role === 'weight') {
-          const row = ctx.$<HTMLElement>(`.axis-row[data-axis="${axis}"]`);
-          row?.classList.toggle('opacity-50', value === 0);
+        const rowEl = ctx.$<HTMLElement>(`[data-icp-row="${axis}"]`);
+        if (rowEl) {
+          const isActive = (icp[axis]!.weight ?? 0) > 0;
+          rowEl.classList.toggle('opacity-40', !isActive);
         }
+      });
+    });
 
-        // Update the summary count
-        updateIcpSummary();
+    ctx.on(ctx.$<HTMLButtonElement>('#delete-btn'), 'click', () => {
+      if (!confirm('Eliminare questa posizione?')) return;
+      supabase.from('positions').delete().eq('id', positionId).then(({ error }) => {
+        if (ctx.signal.aborted) return;
+        if (error) { showToast(`Errore: ${error.message}`, 'error'); return; }
+        showToast('Posizione eliminata');
+        setTimeout(() => ctx.router.navigate('/positions'), 300);
       });
     });
   }
 
-  function refreshIcpSliders() {
-    AXES.forEach((axis) => {
-      const cfg = icpConfig[axis] ?? { target: 3, weight: 0 };
-      const tInput = ctx.$<HTMLInputElement>(`input[data-role="target"][data-axis="${axis}"]`);
-      const wInput = ctx.$<HTMLInputElement>(`input[data-role="weight"][data-axis="${axis}"]`);
-      const tRead  = ctx.$<HTMLElement>(`[data-readout="target"][data-axis="${axis}"]`);
-      const wRead  = ctx.$<HTMLElement>(`[data-readout="weight"][data-axis="${axis}"]`);
-      const row    = ctx.$<HTMLElement>(`.axis-row[data-axis="${axis}"]`);
-
-      if (tInput) tInput.value = String(cfg.target);
-      if (wInput) wInput.value = String(cfg.weight);
-      if (tRead)  tRead.textContent = String(cfg.target);
-      if (wRead)  wRead.textContent = String(cfg.weight);
-      row?.classList.toggle('opacity-50', cfg.weight === 0);
-    });
-    updateIcpSummary();
-  }
-
-  function updateIcpSummary() {
-    const toggle = ctx.$<HTMLElement>('#icp-toggle');
-    const summaryEl = toggle?.querySelector<HTMLElement>('p.text-xs');
-    if (!summaryEl) return;
-    const configuredCount = Object.values(icpConfig).filter((c) => c && c.weight > 0).length;
-    summaryEl.textContent = configuredCount > 0
-      ? `${configuredCount} ${configuredCount === 1 ? 'asse configurato' : 'assi configurati'}, ${AXES.length - configuredCount} ignorati`
-      : 'Nessun asse configurato';
-  }
-
-  function bindDeleteButton() {
-    if (!isEdit) return;
-    const btn = ctx.$<HTMLButtonElement>('#delete-btn');
-    ctx.on(btn, 'click', async () => {
-      if (!confirm('Sei sicuro di voler eliminare questa posizione? Verranno eliminate anche tutte le candidature associate.')) return;
-
-      const { error } = await supabase.from('positions').delete().eq('id', positionId);
-      if (ctx.signal.aborted) return;
-      if (error) { showToast(`Errore: ${error.message}`, 'error'); return; }
-
-      showToast('Posizione eliminata');
-      setTimeout(() => ctx.router.navigate('/positions'), 400);
-    });
-  }
-
-  // ── Submit ──
-
-  async function handleSubmit(form: HTMLFormElement) {
-    const submitBtn = ctx.$<HTMLButtonElement>('#submit-btn');
-    const submitText = ctx.$('#submit-text');
-    const submitSpinner = ctx.$('#submit-spinner');
-
-    if (!submitBtn || !submitText || !submitSpinner) return;
-
+  function handleSubmit() {
+    if (isSaving) return;
     isSaving = true;
-    submitBtn.disabled = true;
-    submitText.textContent = 'Salvataggio...';
-    submitSpinner.classList.remove('hidden');
 
-    const formData = new FormData(form);
-    const title = (formData.get('title') as string).trim();
+    const form = ctx.$<HTMLFormElement>('#position-form');
+    if (!form) { isSaving = false; return; }
+    const data = new FormData(form);
 
-    // Strip out axes where weight = 0 (keep payload tight)
-    const cleanedIcp: IcpConfig = {};
+    // Clean ICP: drop weight-0 entries
+    const cleanIcp: IcpConfig = {};
     for (const axis of AXES) {
-      const cfg = icpConfig[axis];
-      if (cfg && cfg.weight > 0) cleanedIcp[axis] = cfg;
+      const row = icp[axis];
+      if (row && row.weight > 0) cleanIcp[axis] = row;
     }
 
-    const payload: Record<string, unknown> = {
-      title,
-      description: (formData.get('description') as string).trim(),
-      department: formData.get('department'),
-      contract_type: formData.get('contract_type'),
-      location: (formData.get('location') as string).trim(),
-      salary_min: formData.get('salary_min') ? Number(formData.get('salary_min')) : null,
-      salary_max: formData.get('salary_max') ? Number(formData.get('salary_max')) : null,
-      pre_quiz_id:  (formData.get('pre_quiz_id')  as string) || null,
-      post_quiz_id: (formData.get('post_quiz_id') as string) || null,
-      att_quiz_id:  (formData.get('att_quiz_id')  as string) || null,
-      icp_config: cleanedIcp,
-      slug: generateSlug(title),
+    const payload = {
+      title: (data.get('title') as string).trim(),
+      description: (data.get('description') as string).trim(),
+      department: (data.get('department') as string).trim(),
+      contract_type: data.get('contract_type') as ContractType,
+      location: (data.get('location') as string).trim(),
+      salary_min: data.get('salary_min') ? Number(data.get('salary_min')) : null,
+      salary_max: data.get('salary_max') ? Number(data.get('salary_max')) : null,
+      status: data.get('status') as PositionStatus,
+      pre_quiz_id:  (data.get('pre_quiz_id')  as string) || null,
+      post_quiz_id: (data.get('post_quiz_id') as string) || null,
+      att_quiz_id:  (data.get('att_quiz_id')  as string) || null,
+      icp_config: cleanIcp,
+      slug: (data.get('title') as string).trim().toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+      published_at: data.get('status') === 'published'
+        ? (position.published_at ?? new Date().toISOString())
+        : position.published_at ?? null,
     };
 
-    let error: { message: string } | null = null;
+    const op = isEdit
+      ? supabase.from('positions').update(payload).eq('id', positionId).select().single()
+      : supabase.from('positions').insert(payload).select().single();
 
-    if (isEdit) {
-      const statusSelect = ctx.$<HTMLSelectElement>('#status-select');
-      const status = (statusSelect?.value ?? 'draft') as PositionStatus;
-      // Stamp published_at when going to published
-      const withStatus = { ...payload, status } as Record<string, unknown>;
-      if (status === 'published' && position?.status !== 'published') {
-        withStatus.published_at = new Date().toISOString();
-      }
-      ({ error } = await supabase.from('positions').update(withStatus).eq('id', positionId));
-    } else {
-      ({ error } = await supabase.from('positions').insert(payload));
-    }
-
-    if (ctx.signal.aborted) return;
-
-    if (error) {
-      showToast(`Errore: ${error.message}`, 'error');
-      isSaving = false;
-      submitBtn.disabled = false;
-      submitText.textContent = isEdit ? 'Salva modifiche' : 'Crea posizione';
-      submitSpinner.classList.add('hidden');
-      return;
-    }
-
-    showToast(isEdit ? 'Posizione aggiornata' : 'Posizione creata');
-    setTimeout(() => ctx.router.navigate('/positions'), 400);
+    op.then(({ data: result, error }) => {
+      if (ctx.signal.aborted) return;
+      if (error) { showToast(`Errore: ${error.message}`, 'error'); isSaving = false; return; }
+      showToast(isEdit ? 'Posizione aggiornata' : 'Posizione creata');
+      setTimeout(() => ctx.router.navigate('/positions'), 300);
+    });
   }
 };
 
-// ── Helpers ──
+// ── HTML ──
 
-function loadingShell(): string {
+const inputCls = 'w-full px-4 py-3 rounded-xl border border-amia-200 text-sm text-amia-900 placeholder:text-amia-300';
+
+function fieldWrap(label: string, field: string): string {
+  return `<div><label class="block text-xs font-medium text-amia-600 mb-1.5">${label}</label>${field}</div>`;
+}
+
+function quizSelect(label: string, name: string, options: Quiz[], current: string | null | undefined): string {
   return `
-    <div class="p-8 max-w-3xl mx-auto">
-      <div class="flex justify-center py-20"><div class="spinner"></div></div>
+    <div>
+      <label class="block text-[11px] font-medium text-amia-500 mb-1">${label}</label>
+      <select name="${name}" class="w-full px-3 py-2.5 rounded-xl border border-amia-200 text-sm text-amia-900 bg-white">
+        <option value="">Nessuno</option>
+        ${options.map((q) => `<option value="${q.id}" ${current === q.id ? 'selected' : ''}>${escapeText(q.title)}</option>`).join('')}
+      </select>
     </div>
   `;
 }
 
-function generateSlug(title: string): string {
-  return title
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '');
+function icpSection(icp: IcpConfig): string {
+  return `
+    <div class="space-y-3 pt-2">
+      <div>
+        <p class="text-xs font-semibold text-amia-700 uppercase tracking-wider mb-1">Profilo ICP</p>
+        <p class="text-xs text-amia-500">Target = valore ideale (1-5). Peso = importanza dell'asse (0 = ignora, 5 = massimo).</p>
+      </div>
+      <div class="bg-white rounded-2xl border border-amia-100 overflow-hidden">
+        <div class="grid grid-cols-[1fr_auto_auto] gap-3 px-4 py-2 bg-amia-50 border-b border-amia-100 text-[11px] font-medium text-amia-400">
+          <span>Asse</span>
+          <span class="text-center w-20">Target</span>
+          <span class="text-center w-20">Peso</span>
+        </div>
+        ${AXES.map((axis) => {
+          const row = icp[axis] ?? { target: 3, weight: 0 };
+          const isActive = row.weight > 0;
+          return `
+            <div class="grid grid-cols-[1fr_auto_auto] gap-3 px-4 py-2.5 border-b border-amia-50 last:border-b-0 ${isActive ? '' : 'opacity-40'}" data-icp-row="${axis}">
+              <span class="text-xs text-amia-700">${AXIS_LABELS[axis]}</span>
+              <input type="number" min="1" max="5" value="${row.target}" data-axis="${axis}"
+                class="icp-target w-20 px-2 py-1 rounded-lg border border-amia-200 text-xs text-center text-amia-900" />
+              <input type="number" min="0" max="5" value="${row.weight}" data-axis="${axis}"
+                class="icp-weight w-20 px-2 py-1 rounded-lg border border-amia-200 text-xs text-center text-amia-900" />
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
 }
 
-function escapeAttr(s: string): string {
-  return s.replace(/"/g, '&quot;').replace(/</g, '&lt;');
+function loadingShell(): string {
+  return `<div class="p-8 max-w-3xl mx-auto"><div class="flex justify-center py-20"><div class="spinner"></div></div></div>`;
 }
 
-function escapeText(s: string): string {
-  return s.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+function escapeAttr(s: string): string { return s.replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+function escapeText(s: string): string { return s.replace(/</g, '&lt;').replace(/>/g, '&gt;'); }

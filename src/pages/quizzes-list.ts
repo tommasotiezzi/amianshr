@@ -1,8 +1,5 @@
 /**
- * Quizzes list — PageFactory.
- *
- * Shows all quizzes with type badge, duration, and question count.
- * Each card links to the quiz editor.
+ * Quizzes list — sync mount.
  */
 
 import type { PageFactory } from '../lib/page';
@@ -18,45 +15,38 @@ const TYPE_LABELS: Record<QuizType, { label: string; classes: string }> = {
 };
 
 export const createQuizzesListPage: PageFactory = (ctx) => {
-  return {
-    async mount() {
-      ctx.container.innerHTML = shellHtml('Caricamento...');
+  ctx.container.innerHTML = shellHtml('Caricamento...');
 
-      const res = await q.fetchQuizzes({ signal: ctx.signal });
+  q.fetchQuizzes({ signal: ctx.signal })
+    .then((res) => {
       if (ctx.signal.aborted) return;
-
       if (res.error) {
         showToast('Errore nel caricamento dei quiz', 'error');
         ctx.container.innerHTML = shellHtml('Errore nel caricamento');
         return;
       }
-
       renderFull(res.data!);
-    },
-  };
-
-  // ── Render ──
+    })
+    .catch((err) => {
+      if (ctx.signal.aborted) return;
+      console.error('[quizzes-list]', err);
+    });
 
   function renderFull(quizzes: q.QuizWithCount[]) {
     ctx.container.innerHTML = `
       <div class="p-8 max-w-5xl mx-auto">
-
-        <!-- Header -->
         <div class="flex items-center justify-between mb-8">
           <div>
             <h1 class="text-2xl font-semibold text-amia-950 tracking-tight">Quiz</h1>
             <p class="text-amia-500 text-sm mt-1">${quizzes.length} quiz totali</p>
           </div>
-          <a
-            href="#/quizzes/new"
+          <a href="#/quizzes/new"
             class="inline-flex items-center gap-2 bg-amia-950 text-white px-4 py-2.5 rounded-xl
-                   text-sm font-medium hover:bg-amia-900 active:scale-[0.98] transition-all"
-          >
+                   text-sm font-medium hover:bg-amia-900 active:scale-[0.98] transition-all">
             ${iconPlus} Nuovo quiz
           </a>
         </div>
 
-        <!-- List -->
         <div class="space-y-3">
           ${quizzes.length > 0
             ? quizzes.map(quizCard).join('')
@@ -69,8 +59,6 @@ export const createQuizzesListPage: PageFactory = (ctx) => {
     `;
   }
 };
-
-// ── HTML fragments ──
 
 function shellHtml(statusLine: string): string {
   return `

@@ -1,20 +1,20 @@
 /**
- * Hash-based router with page lifecycle.
+ * Hash-based router — fully synchronous.
  *
- * Re-entrancy model:
- *   Instead of locking during navigation, we use a monotonically increasing
- *   generation counter. Each resolve() captures its generation at start;
- *   if the generation has changed by the time an async step completes, it
- *   knows a newer navigation has started and bails out silently.
+ * Pages do their async work in the background and guard DOM writes with
+ * signal.aborted. The router never awaits anything, so navigation is
+ * instant and can't get stuck behind a hung fetch.
  *
- *   Benefits:
- *   - Nothing to get "stuck" in a true/false flag
- *   - If a fetch hangs (e.g., from a backgrounded tab), a subsequent nav
- *     just supersedes it; the stuck one is a harmless no-op when it resumes
- *   - Per-navigation AbortController kills in-flight fetches on supersede
+ * Usage:
+ *   const router = new Router(appEl);
+ *   router.on('/positions', createPositionsListPage);
+ *   router.on('/login', createLoginPage, null);  // null = no wrapper
+ *   router.setDefaultWrapper(sidebarWrapper);
+ *   router.onFallback(() => router.navigate('/dashboard'));
+ *   router.start();
  */
 
-import type { Page, PageContext, PageFactory } from './lib/page';
+import type { PageContext, PageFactory, PageHandle } from './lib/page';
 import { createScopedQuery, DisposerSet } from './lib/dom';
 
 interface Route {
@@ -38,12 +38,8 @@ export class Router {
   private root: HTMLElement;
   private defaultWrapper: PageWrapper | undefined;
 
-  // Generation counter — incremented on every resolve() call.
-  // An async flow that sees its captured generation != current one bails out.
-  private generation = 0;
-
-  // Lifecycle state for the CURRENTLY mounted page
-  private currentPage: Page | null = null;
+  // Current mount state
+  private currentHandle: PageHandle | void | null = null;
   private currentDisposers: DisposerSet | null = null;
   private currentAbortController: AbortController | null = null;
 
@@ -79,7 +75,6 @@ export class Router {
 
   navigate(path: string): void {
     if (window.location.hash.slice(1) === path) {
-      // Same path — force a re-resolve
       this.resolve();
     } else {
       window.location.hash = path;
@@ -103,22 +98,15 @@ export class Router {
 
   start(): void {
     window.addEventListener('hashchange', () => this.resolve());
-
-    // When the tab becomes visible again, re-resolve to recover from any
-    // mounts that were hung by background throttling. Idempotent.
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) this.resolve();
-    });
-
     this.resolve();
   }
 
-  private async resolve(): Promise<void> {
-    // Bump generation. Any in-flight resolve with an older generation
-    // will detect this on its next await and bail silently.
-    const gen = ++this.generation;
-
-    // Unmount whatever was mounted (synchronously kicks off abort)
+  /**
+   * Synchronously unmount the old page and mount the new one.
+   * Never awaits anything. Pages handle their own async work in the background.
+   */
+  private resolve(): void {
+    // Tear down current page (sync: aborts its signal, runs disposers)
     this.unmountCurrent();
 
     const path = this.currentPath;
@@ -129,7 +117,7 @@ export class Router {
       return;
     }
 
-    // Fresh lifecycle state
+    // Fresh state for the new page
     const disposers = new DisposerSet();
     const abortController = new AbortController();
     this.currentDisposers = disposers;
@@ -148,8 +136,7 @@ export class Router {
         currentPath: path,
         disposers,
       });
-      if (gen !== this.generation) return;  // superseded during wrapper (unlikely but possible)
-      if (!c) return;                        // wrapper declined (e.g., auth redirect)
+      if (!c) return;  // wrapper declined (auth redirect, etc.)
       container = c;
     } else {
       this.root.innerHTML = '';
@@ -171,20 +158,14 @@ export class Router {
       onCleanup: (fn) => { disposers.add(fn); },
     };
 
-    const page = match.route.factory(ctx);
-    this.currentPage = page;
-
+    // Call the factory. It must render synchronously.
+    // Any async work it kicks off is fire-and-forget (guarded by ctx.signal).
     try {
-      await page.mount();
+      this.currentHandle = match.route.factory(ctx) ?? null;
     } catch (e) {
-      if (gen === this.generation) {
-        console.error('Page mount error:', e);
-      }
-      // If superseded, swallow — a newer page is already mounted
+      console.error('Page factory error:', e);
+      this.currentHandle = null;
     }
-
-    // If a newer navigation happened, the new resolve has already unmounted
-    // us and reassigned currentPage. Nothing to do.
   }
 
   private findRoute(path: string): { route: Route; params: Record<string, string> } | null {
@@ -200,19 +181,18 @@ export class Router {
   }
 
   /**
-   * Tear down the currently mounted page. Synchronous — just fires the
-   * abort signal and calls disposers. Any awaits inside mount() will either
-   * receive AbortError from their fetch or see the generation mismatch.
+   * Synchronously tear down the current page. Safe to call multiple times.
    */
   private unmountCurrent(): void {
     if (this.currentAbortController) {
       this.currentAbortController.abort();
       this.currentAbortController = null;
     }
-    if (this.currentPage?.unmount) {
-      try { this.currentPage.unmount(); } catch (e) { console.error('Unmount error:', e); }
+    if (this.currentHandle && typeof (this.currentHandle as PageHandle).unmount === 'function') {
+      try { (this.currentHandle as PageHandle).unmount!(); }
+      catch (e) { console.error('Unmount error:', e); }
     }
-    this.currentPage = null;
+    this.currentHandle = null;
     if (this.currentDisposers) {
       this.currentDisposers.disposeAll();
       this.currentDisposers = null;

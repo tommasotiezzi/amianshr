@@ -1,18 +1,12 @@
 /**
  * Question modal — shared UI for create/edit of a quiz_questions row.
  *
- * Supports all 4 question types:
- *   - multiple_choice: options + checkboxes for correct indices
- *   - ranking: draggable items (each with optional axis_value 1-5), defining correct order
- *   - open_text: ideal_answer only
- *   - file_upload: allowed_types + max_size_mb (stub)
+ * Takes an AbortSignal from the caller. When the signal aborts (page unmount),
+ * the modal closes itself and resolves with null. This prevents stuck modals
+ * after navigation.
  *
- * Axis picker appears for all question types but is only meaningful for
- * attitudinal quizzes (the parent passes `showAxisPicker = quiz.quiz_type === 'attitudinal'`).
- *
- * The modal builds its own DOM (appends to document.body) and returns a
- * Promise that resolves with the saved question payload or null on cancel.
- * Cleanup (listeners, DOM removal) is handled internally.
+ * Supports multiple_choice, ranking, open_text, file_upload.
+ * Axis picker appears only for attitudinal quizzes.
  */
 
 import { supabase } from '../lib/supabase-client';
@@ -29,13 +23,13 @@ import {
   type RankingItem,
 } from '../lib/database-types';
 
-// ── Types ──
-
 interface OpenModalArgs {
   quizId: string;
   showAxisPicker: boolean;
   existing: QuizQuestion | null;
   defaultSortOrder: number;
+  /** Cancels the modal when the parent page unmounts. */
+  signal: AbortSignal;
 }
 
 const TYPE_LABELS: Record<QuestionType, string> = {
@@ -45,15 +39,15 @@ const TYPE_LABELS: Record<QuestionType, string> = {
   file_upload:     'Upload file',
 };
 
-/**
- * Show the question modal. Resolves with the saved QuizQuestion row, or null if cancelled.
- */
 export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | null> {
   return new Promise((resolve) => {
-    const { quizId, showAxisPicker, existing, defaultSortOrder } = args;
+    const { quizId, showAxisPicker, existing, defaultSortOrder, signal } = args;
+
+    // If the parent is already aborted, don't even open
+    if (signal.aborted) { resolve(null); return; }
+
     const isNew = !existing;
 
-    // Seed state from existing or defaults
     let qType: QuestionType = existing?.question_type ?? 'multiple_choice';
     let points: number = existing?.points ?? 10;
     let axis: AxisType | null = existing?.axis ?? null;
@@ -62,18 +56,15 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
     let imageUrl: string | null = existing?.config?.image_url ?? null;
     let imageUploading = false;
 
-    // MC state
     let mcOptions: string[] = (existing?.config?.options as string[]) ?? ['', '', '', ''];
     let mcCorrect: number[] = (existing?.answer_key?.correct as number[]) ?? [0];
 
-    // Ranking state
     let rankingItems: RankingItem[] = (existing?.config?.options as RankingItem[]) ?? [
       { id: 'a', label: '', axis_value: 4 },
       { id: 'b', label: '', axis_value: 3 },
       { id: 'c', label: '', axis_value: 2 },
       { id: 'd', label: '', axis_value: 1 },
     ];
-    // Correct order for ranking is an array of item IDs in order (index 0 = rank 1)
     let rankingCorrect: string[] = (existing?.answer_key?.correct as string[])
       ?? rankingItems.map((i) => i.id);
 
@@ -84,7 +75,7 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
     modal.innerHTML = renderModal();
     document.body.appendChild(modal);
 
-    // Collected listeners for cleanup
+    // Local listener tracking
     const disposers: Array<() => void> = [];
     const on = <K extends keyof HTMLElementEventMap>(
       target: HTMLElement | null | undefined,
@@ -96,13 +87,21 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
       disposers.push(() => target.removeEventListener(event, handler as EventListener));
     };
 
+    let closed = false;
     function close(result: QuizQuestion | null) {
-      disposers.forEach((d) => d());
+      if (closed) return;
+      closed = true;
+      disposers.forEach((d) => { try { d(); } catch {} });
       modal.remove();
       resolve(result);
     }
 
-    // ── Render functions ──
+    // AUTO-CLOSE ON NAVIGATION: if the parent page aborts, close us
+    const onAbort = () => close(null);
+    signal.addEventListener('abort', onAbort);
+    disposers.push(() => signal.removeEventListener('abort', onAbort));
+
+    // ── HTML template ──
 
     function renderModal(): string {
       return `
@@ -112,7 +111,7 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
 
             <div class="space-y-4">
 
-              <!-- Type + points -->
+              <!-- Type + points + axis -->
               <div class="grid grid-cols-${showAxisPicker ? 3 : 2} gap-4">
                 <div>
                   <label class="block text-xs font-medium text-amia-600 mb-1.5">Tipo domanda</label>
@@ -151,7 +150,7 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
                 >${escapeText(questionText)}</textarea>
               </div>
 
-              <!-- Image (optional, shown above question on candidate side) -->
+              <!-- Image (optional) -->
               <div>
                 <label class="block text-xs font-medium text-amia-600 mb-1.5">
                   Immagine (opzionale)
@@ -193,6 +192,8 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
       `;
     }
 
+    // ── Body rendering ──
+
     function renderBody() {
       const body = modal.querySelector<HTMLElement>('#q-body');
       if (!body) return;
@@ -210,7 +211,6 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
           </div>
         `;
       } else {
-        // open_text: nothing extra
         body.innerHTML = '';
       }
     }
@@ -245,12 +245,11 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
           </div>
         `;
         const removeBtn = slot.querySelector<HTMLButtonElement>('#q-image-remove');
-        on(removeBtn, 'click', async () => {
+        on(removeBtn, 'click', () => {
           if (!imageUrl) return;
           const urlToDelete = imageUrl;
           imageUrl = null;
           renderImageSlot();
-          // Fire-and-forget — don't block UI on bucket cleanup
           questionImages.delete(urlToDelete).catch(() => {});
         });
         return;
@@ -266,20 +265,25 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
         </label>
       `;
       const input = slot.querySelector<HTMLInputElement>('#q-image-input');
-      on(input, 'change', async () => {
+      on(input, 'change', () => {
         const file = input?.files?.[0];
         if (!file) return;
         imageUploading = true;
         renderImageSlot();
-        try {
-          const { url } = await questionImages.upload(file);
-          imageUrl = url;
-        } catch (e: any) {
-          showToast(e?.message ?? 'Errore nel caricamento', 'error');
-        } finally {
-          imageUploading = false;
-          renderImageSlot();
-        }
+        questionImages.upload(file)
+          .then(({ url }) => {
+            if (closed) return;
+            imageUrl = url;
+          })
+          .catch((e: any) => {
+            if (closed) return;
+            showToast(e?.message ?? 'Errore nel caricamento', 'error');
+          })
+          .finally(() => {
+            if (closed) return;
+            imageUploading = false;
+            renderImageSlot();
+          });
       });
     }
 
@@ -311,8 +315,9 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
     }
 
     function renderRankingBody(): string {
-      // Items shown in their "correct order" — admin drags to reorder
-      const itemsInOrder = rankingCorrect.map((id) => rankingItems.find((i) => i.id === id)).filter(Boolean) as RankingItem[];
+      const itemsInOrder = rankingCorrect
+        .map((id) => rankingItems.find((i) => i.id === id))
+        .filter(Boolean) as RankingItem[];
 
       return `
         <label class="block text-xs font-medium text-amia-600 mb-1.5">
@@ -352,8 +357,7 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
       `;
     }
 
-    // ── Bind type toggle ──
-
+    // Type toggle
     const typeSelect = modal.querySelector<HTMLSelectElement>('#q-type')!;
     on(typeSelect, 'change', () => {
       qType = typeSelect.value as QuestionType;
@@ -365,7 +369,6 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
       axis = (axisSelect?.value || null) as AxisType | null;
     });
 
-    // Initial body render + image slot
     renderBody();
     renderImageSlot();
 
@@ -380,7 +383,6 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
         rerenderMc();
       });
 
-      // Inputs + checkboxes + remove — delegated to live through re-renders
       const delegated = (ev: Event) => {
         const t = ev.target as HTMLElement;
         if (t.classList.contains('mc-input')) {
@@ -410,7 +412,7 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
       bindMcEvents();
     }
 
-    // ── Ranking events (with drag-and-drop) ──
+    // ── Ranking events ──
 
     let draggedId: string | null = null;
 
@@ -425,7 +427,6 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
         rerenderRanking();
       });
 
-      // Input changes
       const delegated = (ev: Event) => {
         const t = ev.target as HTMLElement;
         if (t.classList.contains('ranking-label')) {
@@ -447,7 +448,6 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
       on(container, 'input', delegated);
       on(container, 'click', delegated);
 
-      // Drag and drop
       container.querySelectorAll<HTMLElement>('.ranking-row').forEach((row) => {
         on(row, 'dragstart', (e) => {
           draggedId = row.dataset.id ?? null;
@@ -487,8 +487,6 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
 
     // ── Cancel ──
 
-    // If user uploaded a new image but didn't save (and the question didn't already
-    // have this image), clean up the orphan from storage.
     const originalImageUrl = existing?.config?.image_url ?? null;
     const cancelWithOrphanCleanup = () => {
       if (imageUrl && imageUrl !== originalImageUrl) {
@@ -502,7 +500,7 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
 
     // ── Save ──
 
-    on(modal.querySelector<HTMLButtonElement>('#save-btn'), 'click', async () => {
+    on(modal.querySelector<HTMLButtonElement>('#save-btn'), 'click', () => {
       const text = (modal.querySelector<HTMLTextAreaElement>('#q-text')!).value.trim();
       if (!text) { showToast('Inserisci il testo della domanda', 'error'); return; }
 
@@ -514,7 +512,6 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
       if (idealAnswer) answerKey.ideal_answer = idealAnswer;
       if (imageUrl) config.image_url = imageUrl;
 
-      // Build config + answer_key based on type
       if (qType === 'multiple_choice') {
         const cleanOptions: string[] = [];
         const cleanCorrect: number[] = [];
@@ -534,7 +531,6 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
         answerKey.scoring_method = 'exact';
       }
       else if (qType === 'ranking') {
-        // Filter out empty items
         const cleanItems = rankingItems.filter((i) => i.label.trim());
         const cleanCorrectIds = rankingCorrect.filter((id) => cleanItems.find((i) => i.id === id));
         if (cleanItems.length < 2) { showToast('Servono almeno 2 elementi', 'error'); return; }
@@ -558,25 +554,21 @@ export function openQuestionModal(args: OpenModalArgs): Promise<QuizQuestion | n
         answer_key: answerKey,
       };
 
-      let data: QuizQuestion | null = null;
-      let error: { message: string } | null = null;
+      const op = existing
+        ? supabase.from('quiz_questions').update(payload).eq('id', existing.id).select().single()
+        : supabase.from('quiz_questions').insert(payload).select().single();
 
-      if (existing) {
-        ({ data, error } = await supabase.from('quiz_questions').update(payload).eq('id', existing.id).select().single());
-      } else {
-        ({ data, error } = await supabase.from('quiz_questions').insert(payload).select().single());
-      }
+      op.then(({ data, error }) => {
+        if (closed) return;
+        if (error) { showToast(`Errore: ${error.message}`, 'error'); return; }
 
-      if (error) { showToast(`Errore: ${error.message}`, 'error'); return; }
+        if (originalImageUrl && originalImageUrl !== imageUrl) {
+          questionImages.delete(originalImageUrl).catch(() => {});
+        }
 
-      // If we successfully saved and the old image was replaced or removed,
-      // delete the old file from storage.
-      if (originalImageUrl && originalImageUrl !== imageUrl) {
-        questionImages.delete(originalImageUrl).catch(() => {});
-      }
-
-      showToast(existing ? 'Domanda aggiornata' : 'Domanda aggiunta');
-      close(data);
+        showToast(existing ? 'Domanda aggiornata' : 'Domanda aggiunta');
+        close(data);
+      });
     });
   });
 }
