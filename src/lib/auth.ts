@@ -25,12 +25,26 @@ export async function initAuth(): Promise<User | null> {
     currentUser = await loadProfile(data.session.user);
   }
 
-  supabase.auth.onAuthStateChange(async (_event, session) => {
-    if (session?.user) {
-      currentUser = await loadProfile(session.user);
-    } else {
+  // IMPORTANT: Only react to actual sign-in / sign-out events.
+  // TOKEN_REFRESHED fires on tab-focus after the JWT refresh and would
+  // otherwise trigger a profile fetch that can hang in a backgrounded tab.
+  // We also don't use `async` on the callback — Supabase's auth state
+  // machine blocks on async callbacks, which can lock up the whole auth
+  // system if a profile fetch hangs.
+  supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT' || !session?.user) {
       currentUser = null;
+      return;
     }
+
+    if (event === 'SIGNED_IN') {
+      // Fire and forget — don't block the auth state machine
+      loadProfile(session.user).then((u) => { currentUser = u; }).catch(() => {});
+      return;
+    }
+
+    // TOKEN_REFRESHED, USER_UPDATED, INITIAL_SESSION, etc. — ignore.
+    // The user is already loaded; the token refresh is transparent.
   });
 
   return currentUser;
@@ -68,7 +82,6 @@ export async function logout(): Promise<void> {
 
 /**
  * Carica il profilo dalla tabella profiles.
- * Se non esiste (non dovrebbe succedere grazie al trigger), usa i dati base.
  */
 async function loadProfile(user: { id: string; email?: string }): Promise<User> {
   const { data: profile } = await supabase
