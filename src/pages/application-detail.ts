@@ -16,6 +16,8 @@ import {
 import {
   AXIS_LABELS,
   type ApplicationStatus, type AxisType,
+  type QuizQuestion, type QuestionConfig, type AnswerKey,
+  type RankingItem, type QuizResponse,
 } from '../lib/database-types';
 
 interface FullApp {
@@ -28,12 +30,17 @@ interface FullApp {
   pre_quiz_score: number | null;
   pre_quiz_max_score: number | null;
   pre_quiz_completed_at: string | null;
+  pre_quiz_started_at: string | null;
   pre_quiz_over_time: boolean;
+  pre_quiz_responses: QuizResponse[] | null;
   post_quiz_score: number | null;
   post_quiz_max_score: number | null;
   post_quiz_completed_at: string | null;
+  post_quiz_started_at: string | null;
   post_quiz_over_time: boolean;
+  post_quiz_responses: QuizResponse[] | null;
   att_quiz_completed_at: string | null;
+  att_quiz_responses: QuizResponse[] | null;
   axis_scores: Record<string, { raw: number; match_pct: number }> | null;
   composite_score: number | null;
   candidate: { id: string; first_name: string; last_name: string; email: string; phone: string | null; linkedin_url: string | null };
@@ -45,6 +52,9 @@ interface FullApp {
     app_name: string | null;
     app_color_from: string | null;
     app_color_to: string | null;
+    pre_quiz_id: string | null;
+    post_quiz_id: string | null;
+    att_quiz_id: string | null;
   };
 }
 
@@ -63,16 +73,21 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
   let notes: Note[] = [];
   let cvUrl: string | null = null;
 
+  // Cache of questions per quiz_id, fetched lazily on first expand
+  const questionsByQuiz: Record<string, QuizQuestion[]> = {};
+  // Which quiz sections are expanded ('pre' / 'post' / 'att')
+  const expandedQuizzes = new Set<'pre' | 'post' | 'att'>();
+
   ctx.container.innerHTML = loadingShell();
 
   Promise.all([
     supabase.from('applications').select(`
       id, status, created_at, cv_file_path, cover_letter, portfolio_path,
-      pre_quiz_score, pre_quiz_max_score, pre_quiz_completed_at, pre_quiz_over_time,
-      post_quiz_score, post_quiz_max_score, post_quiz_completed_at, post_quiz_over_time,
-      att_quiz_completed_at, axis_scores, composite_score,
+      pre_quiz_score, pre_quiz_max_score, pre_quiz_completed_at, pre_quiz_started_at, pre_quiz_over_time, pre_quiz_responses,
+      post_quiz_score, post_quiz_max_score, post_quiz_completed_at, post_quiz_started_at, post_quiz_over_time, post_quiz_responses,
+      att_quiz_completed_at, att_quiz_responses, axis_scores, composite_score,
       candidate:candidates(id, first_name, last_name, email, phone, linkedin_url),
-      position:positions(id, title, department, icp_config, app_name, app_color_from, app_color_to)
+      position:positions(id, title, department, icp_config, app_name, app_color_from, app_color_to, pre_quiz_id, post_quiz_id, att_quiz_id)
     `).eq('id', appId).single(),
     supabase.from('application_notes').select('*').eq('application_id', appId).order('created_at', { ascending: false }),
   ])
@@ -145,6 +160,7 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
             ${contactSection()}
             ${quizSection()}
             ${app.axis_scores ? axisBreakdownSection() : ''}
+            ${answersSection()}
             ${coverLetterSection()}
             ${notesSection()}
           </div>
@@ -246,6 +262,222 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
     `;
   }
 
+  // ── Answers (responses) section ──
+
+  type QuizSlot = { kind: 'pre' | 'post' | 'att'; label: string; quizId: string | null; responses: QuizResponse[] | null; completed: string | null; };
+
+  function getQuizSlots(): QuizSlot[] {
+    if (!app) return [];
+    return [
+      { kind: 'pre',  label: 'Logica',       quizId: app.position.pre_quiz_id,  responses: app.pre_quiz_responses,  completed: app.pre_quiz_completed_at },
+      { kind: 'post', label: 'Skills',       quizId: app.position.post_quiz_id, responses: app.post_quiz_responses, completed: app.post_quiz_completed_at },
+      { kind: 'att',  label: 'Attitudinale', quizId: app.position.att_quiz_id,  responses: app.att_quiz_responses,  completed: app.att_quiz_completed_at },
+    ];
+  }
+
+  function answersSection(): string {
+    const slots = getQuizSlots().filter((s) => s.completed && s.responses && s.quizId);
+    if (slots.length === 0) return '';
+
+    return `
+      <div class="bg-white rounded-2xl border border-amia-100 p-6">
+        <h2 class="text-sm font-semibold text-amia-950 mb-4">Risposte del candidato</h2>
+        <div class="space-y-2">
+          ${slots.map((s) => {
+            const isOpen = expandedQuizzes.has(s.kind);
+            return `
+              <div class="rounded-xl border border-amia-100 overflow-hidden" data-answers-quiz="${s.kind}">
+                <button type="button" class="answers-toggle w-full flex items-center justify-between px-4 py-3 hover:bg-amia-50 transition-colors text-left"
+                        data-quiz-kind="${s.kind}" data-quiz-id="${s.quizId}">
+                  <div class="flex items-center gap-3">
+                    <span class="text-amia-300 text-sm transition-transform ${isOpen ? 'rotate-90' : ''}" data-chevron>▶</span>
+                    <span class="text-sm font-medium text-amia-900">${s.label}</span>
+                    <span class="text-[11px] text-amia-400">${s.responses!.length} risposte</span>
+                  </div>
+                </button>
+                <div class="answers-body ${isOpen ? '' : 'hidden'} px-4 py-3 border-t border-amia-100 bg-amia-50/30 space-y-3">
+                  ${isOpen ? renderAnswersBody(s) : '<div class="flex justify-center py-6"><div class="spinner"></div></div>'}
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderAnswersBody(slot: QuizSlot): string {
+    if (!slot.quizId) return '';
+    const questions = questionsByQuiz[slot.quizId];
+    if (!questions) return '<div class="flex justify-center py-6"><div class="spinner"></div></div>';
+
+    if (questions.length === 0) {
+      return '<p class="text-xs text-amia-400 text-center py-4">Nessuna domanda trovata</p>';
+    }
+
+    // Build response map
+    const respMap = new Map<string, QuizResponse>();
+    (slot.responses ?? []).forEach((r) => respMap.set(r.question_id, r));
+
+    return questions
+      .sort((a, b) => a.sort_order - b.sort_order)
+      .map((qn, idx) => renderAnswerCard(qn, respMap.get(qn.id), idx + 1, slot.kind))
+      .join('');
+  }
+
+  function renderAnswerCard(qn: QuizQuestion, resp: QuizResponse | undefined, num: number, kind: 'pre' | 'post' | 'att'): string {
+    const config = (qn.config ?? {}) as QuestionConfig;
+    const answerKey = (qn.answer_key ?? {}) as AnswerKey;
+
+    const body = renderAnswerBody(qn, config, answerKey, resp, kind);
+
+    return `
+      <div class="bg-white rounded-xl border border-amia-100 p-4">
+        <div class="flex items-start gap-2 mb-2">
+          <span class="text-[11px] font-mono text-amia-300 bg-amia-50 px-1.5 py-0.5 rounded shrink-0">${num}</span>
+          <p class="text-sm text-amia-900 leading-relaxed">${escapeText(qn.question_text)}</p>
+        </div>
+        ${config.image_url ? `
+          <div class="my-2 rounded-lg overflow-hidden border border-amia-100 bg-amia-50">
+            <img src="${escapeAttr(config.image_url)}" alt="" class="w-full max-h-48 object-contain bg-white" loading="lazy" />
+          </div>
+        ` : ''}
+        ${body}
+        ${(resp?.points_earned != null) ? `
+          <div class="mt-2 text-[11px] text-amia-400">Punti: <span class="font-semibold text-amia-700">${resp.points_earned}</span> / ${qn.points}</div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  function renderAnswerBody(qn: QuizQuestion, config: QuestionConfig, answerKey: AnswerKey, resp: QuizResponse | undefined, kind: 'pre' | 'post' | 'att'): string {
+    if (!resp) return '<p class="text-xs text-amia-400 italic">Nessuna risposta</p>';
+
+    if (qn.question_type === 'multiple_choice') {
+      const options = (config.options as string[]) ?? [];
+      const correct = (answerKey.correct as number[]) ?? [];
+      const picked = (resp.answer as number[]) ?? [];
+      return `
+        <div class="space-y-1 mt-2">
+          ${options.map((opt, i) => {
+            const isPicked = picked.includes(i);
+            const isCorrect = correct.includes(i);
+            // 4 visual states
+            let bg = 'bg-white border border-amia-100';
+            let icon = '<span class="w-3.5 h-3.5 rounded-full border border-amia-200 shrink-0"></span>';
+            if (isPicked && isCorrect) {
+              bg = 'bg-emerald-50 border border-emerald-200';
+              icon = '<span class="text-emerald-600 text-sm shrink-0">✓</span>';
+            } else if (isPicked && !isCorrect) {
+              bg = 'bg-red-50 border border-red-200';
+              icon = '<span class="text-red-500 text-sm shrink-0">✗</span>';
+            } else if (!isPicked && isCorrect) {
+              bg = 'bg-amber-50 border border-amber-200';
+              icon = '<span class="text-amber-500 text-xs shrink-0">★</span>';
+            }
+            return `
+              <div class="flex items-start gap-2 px-3 py-1.5 rounded-lg ${bg}">
+                ${icon}
+                <span class="text-xs text-amia-800 flex-1">${escapeText(opt)}</span>
+                ${isPicked ? '<span class="text-[10px] font-medium text-amia-500 shrink-0">scelta</span>' : ''}
+                ${!isPicked && isCorrect ? '<span class="text-[10px] font-medium text-amber-600 shrink-0">corretta</span>' : ''}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    if (qn.question_type === 'ranking') {
+      const items = (config.options as RankingItem[]) ?? [];
+      const itemMap = new Map(items.map((it) => [it.id, it]));
+      const candidateOrder = (resp.answer as string[]) ?? [];
+      const correctOrder = (answerKey.correct as string[]) ?? [];
+
+      // Build row-by-row comparison
+      const rowsCount = Math.max(candidateOrder.length, correctOrder.length);
+
+      if (kind === 'att') {
+        // Attitudinal — no "correct", show order + axis_value
+        return `
+          <div class="mt-2">
+            <p class="text-[11px] font-medium text-amia-500 mb-1.5">Ordine del candidato (top → bottom):</p>
+            <div class="space-y-1">
+              ${candidateOrder.map((id, i) => {
+                const item = itemMap.get(id);
+                if (!item) return '';
+                return `
+                  <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white border border-amia-100">
+                    <span class="w-5 h-5 rounded-full bg-amia-100 text-amia-600 flex items-center justify-center text-[10px] font-semibold shrink-0">${i + 1}</span>
+                    <span class="text-xs text-amia-800 flex-1">${escapeText(item.label)}</span>
+                    ${item.axis_value != null ? `<span class="text-[10px] text-amia-400 shrink-0">val ${item.axis_value}</span>` : ''}
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      // Logic / skills ranking — show side by side
+      return `
+        <div class="grid grid-cols-2 gap-3 mt-2">
+          <div>
+            <p class="text-[11px] font-medium text-amia-500 mb-1.5">Risposta del candidato</p>
+            <div class="space-y-1">
+              ${candidateOrder.map((id, i) => {
+                const item = itemMap.get(id);
+                if (!item) return '';
+                const expectedAt = correctOrder.indexOf(id);
+                const exact = expectedAt === i;
+                const offByOne = !exact && Math.abs(expectedAt - i) === 1;
+                let cls = 'bg-red-50 border border-red-200';
+                if (exact) cls = 'bg-emerald-50 border border-emerald-200';
+                else if (offByOne) cls = 'bg-amber-50 border border-amber-200';
+                return `
+                  <div class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg ${cls}">
+                    <span class="w-5 h-5 rounded-full bg-white text-amia-700 flex items-center justify-center text-[10px] font-semibold shrink-0">${i + 1}</span>
+                    <span class="text-xs text-amia-800 flex-1">${escapeText(item.label)}</span>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+          <div>
+            <p class="text-[11px] font-medium text-amia-500 mb-1.5">Ordine corretto</p>
+            <div class="space-y-1">
+              ${correctOrder.map((id, i) => {
+                const item = itemMap.get(id);
+                if (!item) return '';
+                return `
+                  <div class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white border border-amia-100">
+                    <span class="w-5 h-5 rounded-full bg-amia-100 text-amia-600 flex items-center justify-center text-[10px] font-semibold shrink-0">${i + 1}</span>
+                    <span class="text-xs text-amia-800 flex-1">${escapeText(item.label)}</span>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    if (qn.question_type === 'open_text') {
+      return `
+        <div class="mt-2 px-3 py-2 rounded-lg bg-white border border-amia-100">
+          <p class="text-xs text-amia-800 whitespace-pre-wrap">${escapeText(String(resp.answer ?? ''))}</p>
+        </div>
+        ${answerKey.ideal_answer ? `
+          <div class="mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-100">
+            <p class="text-[10px] font-medium text-amber-700 mb-0.5">💡 Risposta ideale</p>
+            <p class="text-xs text-amber-800">${escapeText(answerKey.ideal_answer)}</p>
+          </div>
+        ` : ''}
+      `;
+    }
+
+    return `<pre class="text-xs text-amia-500 mt-2">${escapeText(JSON.stringify(resp.answer))}</pre>`;
+  }
   function coverLetterSection(): string {
     if (!app?.cover_letter) return '';
     return `
@@ -338,6 +570,36 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
           renderFull();
           bindEvents();
         });
+      });
+    });
+
+    // Answers section toggle (lazy-fetch questions on first expand)
+    ctx.$$<HTMLButtonElement>('.answers-toggle').forEach((btn) => {
+      ctx.on(btn, 'click', () => {
+        const kind = btn.dataset.quizKind as 'pre' | 'post' | 'att';
+        const quizId = btn.dataset.quizId!;
+
+        if (expandedQuizzes.has(kind)) {
+          expandedQuizzes.delete(kind);
+          renderFull();
+          bindEvents();
+          return;
+        }
+
+        expandedQuizzes.add(kind);
+        renderFull();
+        bindEvents();
+
+        // Lazy fetch if not cached
+        if (!questionsByQuiz[quizId]) {
+          supabase.from('quiz_questions').select('*').eq('quiz_id', quizId).then(({ data, error }) => {
+            if (ctx.signal.aborted || !expandedQuizzes.has(kind)) return;
+            if (error) { showToast('Errore caricamento domande', 'error'); return; }
+            questionsByQuiz[quizId] = data ?? [];
+            renderFull();
+            bindEvents();
+          });
+        }
       });
     });
   }
