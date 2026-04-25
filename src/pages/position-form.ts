@@ -7,6 +7,7 @@ import { supabase } from '../lib/supabase-client';
 import * as q from '../lib/queries';
 import { showToast } from '../lib/toast';
 import { appPillHtml } from '../lib/formatting';
+import { marked } from 'marked';
 import {
   AXES, AXIS_LABELS,
   type AxisType, type Position, type PositionStatus, type ContractType, type Quiz,
@@ -88,7 +89,31 @@ export const createPositionFormPage: PageFactory = (ctx) => {
           ${fieldWrap('Titolo *', `<input type="text" name="title" required value="${escapeAttr(position.title ?? '')}" placeholder="es. Senior Data Analyst" class="${inputCls}" />`)}
 
           <!-- Description -->
-          ${fieldWrap('Descrizione *', `<textarea name="description" rows="4" required class="${inputCls} resize-none">${escapeText(position.description ?? '')}</textarea>`)}
+          <!-- Description with live markdown preview -->
+          <div>
+            <div class="flex items-center justify-between mb-1.5">
+              <label class="block text-xs font-medium text-amia-600">Descrizione *</label>
+              <div class="inline-flex rounded-lg bg-amia-50 p-0.5 text-[11px]">
+                <button type="button" id="desc-tab-edit"
+                  class="desc-tab px-2.5 py-1 rounded-md font-medium transition-colors bg-white text-amia-900 shadow-sm">
+                  Scrivi
+                </button>
+                <button type="button" id="desc-tab-preview"
+                  class="desc-tab px-2.5 py-1 rounded-md font-medium transition-colors text-amia-500 hover:text-amia-700">
+                  Anteprima
+                </button>
+              </div>
+            </div>
+            <div id="desc-edit-pane">
+              <textarea name="description" id="desc-textarea" rows="10" required
+                placeholder="**Drive the visual direction** for new launches.&#10;&#10;Responsibilities:&#10;- Define brand and creative direction&#10;- Own 0-to-1 product design"
+                class="w-full px-4 py-3 rounded-xl border border-amia-200 text-sm text-amia-900 placeholder:text-amia-300 resize-y font-mono leading-relaxed">${escapeText(position.description ?? '')}</textarea>
+              <p class="text-[11px] text-amia-400 mt-1.5">
+                Supporta markdown: <code class="font-mono">**grassetto**</code>, <code class="font-mono">*corsivo*</code>, <code class="font-mono">- elenco</code>, <code class="font-mono">[link](url)</code>, <code class="font-mono"># titolo</code>
+              </p>
+            </div>
+            <div id="desc-preview-pane" class="hidden md-preview px-4 py-3 rounded-xl border border-amia-200 bg-amia-50/40 min-h-[260px] text-sm text-amia-900"></div>
+          </div>
 
           <!-- Dept + Contract -->
           <div class="grid grid-cols-2 gap-4">
@@ -184,6 +209,35 @@ export const createPositionFormPage: PageFactory = (ctx) => {
     ctx.on(colorFromInput, 'input', updatePreview);
     ctx.on(colorToInput, 'input', updatePreview);
     updatePreview();
+
+    // Description: write/preview tab toggle
+    const descTextarea = ctx.$<HTMLTextAreaElement>('#desc-textarea');
+    const editPane     = ctx.$<HTMLElement>('#desc-edit-pane');
+    const previewPane  = ctx.$<HTMLElement>('#desc-preview-pane');
+    const tabEdit      = ctx.$<HTMLButtonElement>('#desc-tab-edit');
+    const tabPreview   = ctx.$<HTMLButtonElement>('#desc-tab-preview');
+
+    const activeTabCls   = 'bg-white text-amia-900 shadow-sm';
+    const inactiveTabCls = 'text-amia-500 hover:text-amia-700';
+
+    const setTabActive = (active: 'edit' | 'preview') => {
+      if (!tabEdit || !tabPreview || !editPane || !previewPane) return;
+      if (active === 'edit') {
+        tabEdit.className    = `desc-tab px-2.5 py-1 rounded-md font-medium transition-colors ${activeTabCls}`;
+        tabPreview.className = `desc-tab px-2.5 py-1 rounded-md font-medium transition-colors ${inactiveTabCls}`;
+        editPane.classList.remove('hidden');
+        previewPane.classList.add('hidden');
+      } else {
+        tabPreview.className = `desc-tab px-2.5 py-1 rounded-md font-medium transition-colors ${activeTabCls}`;
+        tabEdit.className    = `desc-tab px-2.5 py-1 rounded-md font-medium transition-colors ${inactiveTabCls}`;
+        editPane.classList.add('hidden');
+        previewPane.classList.remove('hidden');
+        previewPane.innerHTML = renderDescriptionPreview(descTextarea?.value ?? '');
+      }
+    };
+
+    ctx.on(tabEdit, 'click', () => setTabActive('edit'));
+    ctx.on(tabPreview, 'click', () => setTabActive('preview'));
 
     // ICP target/weight inputs
     ctx.$$<HTMLInputElement>('.icp-target, .icp-weight').forEach((input) => {
@@ -324,3 +378,12 @@ function loadingShell(): string {
 
 function escapeAttr(s: string): string { return s.replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
 function escapeText(s: string): string { return s.replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function renderDescriptionPreview(md: string): string {
+  if (!md.trim()) {
+    return '<p class="text-amia-300 italic">Niente da mostrare ancora.</p>';
+  }
+  // marked.parse can return string | Promise<string> depending on async opts.
+  // We're sync here, so cast safely.
+  return marked.parse(md, { async: false }) as string;
+}
