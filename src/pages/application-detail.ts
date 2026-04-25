@@ -584,18 +584,22 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
     ctx.on(ctx.$<HTMLButtonElement>('#delete-app-btn'), 'click', () => {
       if (!app) return;
       const candidateLabel = `${app.candidate.first_name} ${app.candidate.last_name}`.trim() || app.candidate.email;
-      const confirmMsg = `Eliminare definitivamente la candidatura di ${candidateLabel} per "${app.position.title}"?\n\nQuesta operazione non può essere annullata. Verranno eliminate anche tutte le risposte ai quiz e le note.`;
+      const confirmMsg = `Eliminare definitivamente la candidatura di ${candidateLabel} per "${app.position.title}"?\n\nQuesta operazione non può essere annullata. Verranno eliminate anche tutte le risposte ai quiz, le note, lo storico stati e i file caricati (CV / portfolio).`;
       if (!confirm(confirmMsg)) return;
 
       const cvPath = app.cv_file_path;
+      const portfolioPath = app.portfolio_path;
 
       supabase.from('applications').delete().eq('id', app.id).then(({ error }) => {
         if (ctx.signal.aborted) return;
         if (error) { showToast(`Errore: ${error.message}`, 'error'); return; }
 
-        // Best-effort CV cleanup — orphan if it fails
+        // Best-effort file cleanup — orphans if it fails (storage isn't transactional with the row)
         if (cvPath) {
           supabase.storage.from('cvs').remove([cvPath]).catch(() => {});
+        }
+        if (portfolioPath) {
+          supabase.storage.from('cvs').remove([portfolioPath]).catch(() => {});
         }
 
         showToast('Candidatura eliminata');
