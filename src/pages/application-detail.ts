@@ -234,7 +234,24 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
 
     return `
       <div class="bg-white rounded-2xl border border-amia-100 p-6">
-        <h2 class="text-sm font-semibold text-amia-950 mb-4">Profilo assi</h2>
+        <div class="flex items-center gap-2 mb-4">
+          <h2 class="text-sm font-semibold text-amia-950">Profilo assi</h2>
+          <span class="relative inline-flex group">
+            <span class="w-4 h-4 rounded-full bg-amia-100 text-amia-500 text-[10px] font-semibold flex items-center justify-center cursor-help select-none">i</span>
+            <span class="invisible group-hover:visible absolute left-1/2 -translate-x-1/2 top-full mt-2 w-[320px] z-10
+                         bg-amia-950 text-white text-[11px] font-normal leading-relaxed rounded-xl p-3 shadow-lg">
+              <strong class="block mb-1.5 text-[11px] font-semibold">Come si calcola il match</strong>
+              Ogni asse confronta il valore grezzo del candidato col target del ruolo:
+              <span class="block mt-1 font-mono text-[10px] text-amia-300">match = max(0, 100 − |raw − target| × 25)</span>
+              <span class="block mt-2">La distanza dal target conta in entrambe le direzioni.
+              Essere "troppo" su un asse non sempre è un vantaggio:
+              un profilo molto data-driven, ad esempio, può rallentare un ruolo
+              che richiede invece azione rapida.</span>
+              <span class="block mt-2 text-amia-300">Il peso non cambia il match per asse, ma pesa il contributo
+              al match composito mostrato in alto.</span>
+            </span>
+          </span>
+        </div>
         <div class="space-y-3">
           ${rows.map((r) => {
             const color = 'bg-accent';
@@ -534,6 +551,15 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
           </div>
         ` : `<p class="text-xs text-amia-400 italic">Stato finale</p>`}
       </div>
+
+      <div class="bg-white rounded-2xl border border-red-100 p-6">
+        <h2 class="text-sm font-semibold text-red-700 mb-1">Zona pericolosa</h2>
+        <p class="text-xs text-amia-500 mb-4">Eliminare la candidatura cancella anche le risposte ai quiz e le note. Operazione irreversibile.</p>
+        <button id="delete-app-btn"
+          class="w-full px-3 py-2.5 rounded-xl text-sm font-medium bg-red-50 text-red-700 hover:bg-red-100 transition-colors">
+          Elimina candidatura
+        </button>
+      </div>
     `;
   }
 
@@ -551,6 +577,29 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
           renderFull();
           bindEvents();
         });
+      });
+    });
+
+    // Delete application
+    ctx.on(ctx.$<HTMLButtonElement>('#delete-app-btn'), 'click', () => {
+      if (!app) return;
+      const candidateLabel = `${app.candidate.first_name} ${app.candidate.last_name}`.trim() || app.candidate.email;
+      const confirmMsg = `Eliminare definitivamente la candidatura di ${candidateLabel} per "${app.position.title}"?\n\nQuesta operazione non può essere annullata. Verranno eliminate anche tutte le risposte ai quiz e le note.`;
+      if (!confirm(confirmMsg)) return;
+
+      const cvPath = app.cv_file_path;
+
+      supabase.from('applications').delete().eq('id', app.id).then(({ error }) => {
+        if (ctx.signal.aborted) return;
+        if (error) { showToast(`Errore: ${error.message}`, 'error'); return; }
+
+        // Best-effort CV cleanup — orphan if it fails
+        if (cvPath) {
+          supabase.storage.from('cvs').remove([cvPath]).catch(() => {});
+        }
+
+        showToast('Candidatura eliminata');
+        ctx.router.navigate('/applications');
       });
     });
 
