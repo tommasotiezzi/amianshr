@@ -6,6 +6,7 @@ import type { PageFactory } from '../lib/page';
 import { supabase } from '../lib/supabase-client';
 import * as q from '../lib/queries';
 import { showToast } from '../lib/toast';
+import { appPillHtml } from '../lib/formatting';
 import {
   AXES, AXIS_LABELS,
   type AxisType, type Position, type PositionStatus, type ContractType, type Quiz,
@@ -34,7 +35,10 @@ export const createPositionFormPage: PageFactory = (ctx) => {
 
   let position: Partial<Position> = isEdit ? {} : {
     title: '', description: '', department: '', contract_type: 'full_time',
-    location: '', salary_min: null, salary_max: null, status: 'draft',
+    location: '', salary_min: null, salary_max: null,
+    stock_options: null, bonus: null,
+    app_name: null, app_color_from: null, app_color_to: null,
+    status: 'draft',
     pre_quiz_id: null, post_quiz_id: null, att_quiz_id: null, icp_config: {},
   };
   let quizzes: Quiz[] = [];
@@ -105,6 +109,26 @@ export const createPositionFormPage: PageFactory = (ctx) => {
             ${fieldWrap('RAL massima (opzionale)', `<input type="number" name="salary_max" value="${position.salary_max ?? ''}" placeholder="45000" class="${inputCls}" />`)}
           </div>
 
+          <!-- Stock options -->
+          ${fieldWrap('Stock option (opzionale)', `<textarea name="stock_options" rows="2" placeholder="es. Vesting 4 anni, cliff 1 anno, 0.1-0.3% equity" class="${inputCls} resize-none">${escapeText(position.stock_options ?? '')}</textarea>`)}
+
+          <!-- Bonus -->
+          ${fieldWrap('Bonus (opzionale)', `<textarea name="bonus" rows="2" placeholder="es. Performance bonus fino al 10% RAL, signing €5K" class="${inputCls} resize-none">${escapeText(position.bonus ?? '')}</textarea>`)}
+
+          <!-- App pill -->
+          <div class="space-y-3 pt-4 border-t border-amia-100">
+            <p class="text-xs font-semibold text-amia-700 uppercase tracking-wider">App / Progetto (opzionale)</p>
+            <div class="grid grid-cols-[1fr_auto_auto] gap-3 items-end">
+              ${fieldWrap('Nome app', `<input type="text" id="app-name-input" name="app_name" value="${escapeAttr(position.app_name ?? '')}" placeholder="es. Algo Fantacalcio" class="${inputCls}" />`)}
+              ${fieldWrap('Colore inizio', `<input type="color" id="app-color-from" name="app_color_from" value="${position.app_color_from ?? '#FFE367'}" class="w-14 h-12 rounded-xl border border-amia-200 cursor-pointer" />`)}
+              ${fieldWrap('Colore fine', `<input type="color" id="app-color-to" name="app_color_to" value="${position.app_color_to ?? '#FF6444'}" class="w-14 h-12 rounded-xl border border-amia-200 cursor-pointer" />`)}
+            </div>
+            <div class="flex items-center gap-2 text-xs text-amia-500">
+              <span>Anteprima:</span>
+              <span id="app-pill-preview"></span>
+            </div>
+          </div>
+
           <!-- Quiz -->
           <div class="space-y-3 pt-2">
             <p class="text-xs font-semibold text-amia-700 uppercase tracking-wider">Quiz associati</p>
@@ -142,6 +166,24 @@ export const createPositionFormPage: PageFactory = (ctx) => {
       e.preventDefault();
       handleSubmit();
     });
+
+    // App pill live preview
+    const appNameInput = ctx.$<HTMLInputElement>('#app-name-input');
+    const colorFromInput = ctx.$<HTMLInputElement>('#app-color-from');
+    const colorToInput = ctx.$<HTMLInputElement>('#app-color-to');
+    const previewEl = ctx.$<HTMLElement>('#app-pill-preview');
+    const updatePreview = () => {
+      if (!previewEl) return;
+      previewEl.innerHTML = appPillHtml({
+        app_name: appNameInput?.value || null,
+        app_color_from: colorFromInput?.value || null,
+        app_color_to: colorToInput?.value || null,
+      }, 'sm');
+    };
+    ctx.on(appNameInput, 'input', updatePreview);
+    ctx.on(colorFromInput, 'input', updatePreview);
+    ctx.on(colorToInput, 'input', updatePreview);
+    updatePreview();
 
     // ICP target/weight inputs
     ctx.$$<HTMLInputElement>('.icp-target, .icp-weight').forEach((input) => {
@@ -195,6 +237,11 @@ export const createPositionFormPage: PageFactory = (ctx) => {
       location: (data.get('location') as string).trim(),
       salary_min: data.get('salary_min') ? Number(data.get('salary_min')) : null,
       salary_max: data.get('salary_max') ? Number(data.get('salary_max')) : null,
+      stock_options: ((data.get('stock_options') as string) || '').trim() || null,
+      bonus: ((data.get('bonus') as string) || '').trim() || null,
+      app_name: ((data.get('app_name') as string) || '').trim() || null,
+      app_color_from: ((data.get('app_color_from') as string) || '').trim() || null,
+      app_color_to: ((data.get('app_color_to') as string) || '').trim() || null,
       status: data.get('status') as PositionStatus,
       pre_quiz_id:  (data.get('pre_quiz_id')  as string) || null,
       post_quiz_id: (data.get('post_quiz_id') as string) || null,

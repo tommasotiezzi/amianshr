@@ -11,7 +11,7 @@ import { showToast } from '../lib/toast';
 import {
   applicationStatusBadge, applicationStatusLabel,
   formatDate, formatDateTime, scoreDisplay,
-  compositeScoreDisplay, pctColor,
+  compositeScoreDisplay, pctColor, appPillHtml,
 } from '../lib/formatting';
 import {
   AXIS_LABELS,
@@ -37,7 +37,15 @@ interface FullApp {
   axis_scores: Record<string, { raw: number; match_pct: number }> | null;
   composite_score: number | null;
   candidate: { id: string; first_name: string; last_name: string; email: string; phone: string | null; linkedin_url: string | null };
-  position: { id: string; title: string; department: string; icp_config: Record<string, { target: number; weight: number }> };
+  position: {
+    id: string;
+    title: string;
+    department: string;
+    icp_config: Record<string, { target: number; weight: number }>;
+    app_name: string | null;
+    app_color_from: string | null;
+    app_color_to: string | null;
+  };
 }
 
 interface Note { id: string; content: string; created_at: string; author_id: string; }
@@ -64,7 +72,7 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
       post_quiz_score, post_quiz_max_score, post_quiz_completed_at, post_quiz_over_time,
       att_quiz_completed_at, axis_scores, composite_score,
       candidate:candidates(id, first_name, last_name, email, phone, linkedin_url),
-      position:positions(id, title, department, icp_config)
+      position:positions(id, title, department, icp_config, app_name, app_color_from, app_color_to)
     `).eq('id', appId).single(),
     supabase.from('application_notes').select('*').eq('application_id', appId).order('created_at', { ascending: false }),
   ])
@@ -113,9 +121,12 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
             <h1 class="text-2xl font-semibold text-amia-950 tracking-tight">
               ${escapeText(app.candidate.first_name)} ${escapeText(app.candidate.last_name)}
             </h1>
-            <p class="text-amia-500 text-sm mt-1">
-              ${escapeText(app.position.title)} · ${escapeText(app.position.department)}
-            </p>
+            <div class="flex items-center gap-2 mt-1 flex-wrap">
+              <p class="text-amia-500 text-sm">
+                ${escapeText(app.position.title)} · ${escapeText(app.position.department)}
+              </p>
+              ${appPillHtml(app.position, 'sm')}
+            </div>
             <div class="flex items-center gap-3 mt-3">
               ${applicationStatusBadge(app.status)}
               <span class="text-xs text-amia-400">Candidatura del ${formatDate(app.created_at)}</span>

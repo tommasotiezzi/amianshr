@@ -127,3 +127,33 @@ export function salaryRange(min: number | null, max: number | null): string {
 /** Re-export AXIS_LABELS from database-types for convenience. */
 export { AXIS_LABELS } from './database-types';
 export type { AxisType };
+
+// ── App pill ──
+
+interface AppPillSource {
+  app_name: string | null;
+  app_color_from: string | null;
+  app_color_to: string | null;
+}
+
+/**
+ * Render a gradient pill for the position's associated app/project.
+ * Returns empty string if app_name is null. Always white text.
+ *
+ * `size`: 'sm' for list cards, 'md' for headers.
+ */
+export function appPillHtml(p: AppPillSource, size: 'sm' | 'md' = 'sm'): string {
+  if (!p.app_name) return '';
+  const from = p.app_color_from || '#6b7280';
+  const to   = p.app_color_to   || '#374151';
+  const sizing = size === 'md'
+    ? 'px-3 py-1 text-xs'
+    : 'px-2 py-0.5 text-[11px]';
+  const safeName = p.app_name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `
+    <span class="inline-flex items-center rounded-md font-semibold text-white ${sizing}"
+          style="background-image: linear-gradient(135deg, ${from} 0%, ${to} 100%);">
+      ${safeName}
+    </span>
+  `;
+}

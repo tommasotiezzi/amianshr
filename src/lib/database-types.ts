@@ -113,6 +113,11 @@ export interface Position {
   location: string;
   salary_min: number | null;
   salary_max: number | null;
+  stock_options: string | null;
+  bonus: string | null;
+  app_name: string | null;
+  app_color_from: string | null;
+  app_color_to: string | null;
   status: PositionStatus;
   pre_quiz_id: string | null;
   post_quiz_id: string | null;

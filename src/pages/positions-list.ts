@@ -11,6 +11,7 @@ import {
   positionStatusBadge,
   contractLabel,
   salaryRange,
+  appPillHtml,
 } from '../lib/formatting';
 import type { PositionStatus } from '../lib/database-types';
 
@@ -150,9 +151,10 @@ function positionCard(p: q.PositionWithCount): string {
                 hover:shadow-card hover:border-amia-200 transition-all">
       <div class="flex items-start justify-between">
         <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-3 mb-2">
+          <div class="flex items-center gap-3 mb-2 flex-wrap">
             <h3 class="text-[15px] font-semibold text-amia-950">${p.title}</h3>
             ${positionStatusBadge(p.status)}
+            ${appPillHtml(p, 'sm')}
           </div>
           <p class="text-xs text-amia-400">
             ${p.department} · ${p.location} · ${contractLabel(p.contract_type)}

@@ -2,7 +2,7 @@
  * App entry — wires routes and boots.
  */
 
-import './style.css';
+import '../style.css';
 
 import { Router } from './router';
 import { initAuth, isAuthenticated, isAdmin } from './lib/auth';
