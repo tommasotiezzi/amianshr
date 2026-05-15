@@ -45,6 +45,7 @@ interface FullApp {
   composite_score: number | null;
   screened: boolean;
   standby: boolean;
+  tier: 'best' | 'high' | 'medium' | null;
   candidate: {
     id: string;
     first_name: string;
@@ -96,7 +97,7 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
       pre_quiz_score, pre_quiz_max_score, pre_quiz_completed_at, pre_quiz_started_at, pre_quiz_over_time, pre_quiz_responses,
       post_quiz_score, post_quiz_max_score, post_quiz_completed_at, post_quiz_started_at, post_quiz_over_time, post_quiz_responses,
       att_quiz_completed_at, att_quiz_responses, axis_scores, composite_score,
-      screened, standby,
+      screened, standby, tier,
       candidate:candidates(id, first_name, last_name, email, phone, linkedin_url, work_location),
       position:positions(id, title, department, icp_config, app_name, app_color_from, app_color_to, pre_quiz_id, post_quiz_id, att_quiz_id)
     `).eq('id', appId).single(),
@@ -162,6 +163,12 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
               <button id="flag-standby" class="${detailFlagClasses(app.standby)}" data-flag="standby" data-value="${app.standby}" title="On hold / standby">
                 ${app.standby ? '⏸ Standby' : '○ Standby'}
               </button>
+              <div class="inline-flex items-center gap-1 pl-2 ml-1 border-l border-amia-200" id="tier-row">
+                <span class="text-[11px] text-amia-400 mr-1">Tier:</span>
+                ${detailTierBtn('best',   app.tier === 'best',   '⭐ Best')}
+                ${detailTierBtn('high',   app.tier === 'high',   '▲ High')}
+                ${detailTierBtn('medium', app.tier === 'medium', '◆ Medium')}
+              </div>
             </div>
           </div>
           ${app.composite_score != null ? `
@@ -625,6 +632,29 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
       });
     });
 
+    // Tier picker (click active one to clear)
+    ctx.$$<HTMLButtonElement>('.detail-tier-btn').forEach((btn) => {
+      ctx.on(btn, 'click', () => {
+        if (!app) return;
+        const t = btn.dataset.tier as 'best' | 'high' | 'medium';
+        const isActive = btn.dataset.active === 'true';
+        const next: 'best' | 'high' | 'medium' | null = isActive ? null : t;
+        const prev = app.tier;
+        app.tier = next;
+        supabase.from('applications').update({ tier: next }).eq('id', app.id).then(({ error }) => {
+          if (ctx.signal.aborted) return;
+          if (error) {
+            showToast(`Errore: ${error.message}`, 'error');
+            app!.tier = prev;
+          } else {
+            showToast(next ? `Tier impostato: ${next}` : 'Tier rimosso');
+          }
+          renderFull();
+          bindEvents();
+        });
+      });
+    });
+
     // Delete application
     ctx.on(ctx.$<HTMLButtonElement>('#delete-app-btn'), 'click', () => {
       if (!app) return;
@@ -753,6 +783,16 @@ function detailFlagClasses(active: boolean): string {
       ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
       : 'bg-amia-50 text-amia-500 border border-amia-200 hover:bg-amia-100'
   }`;
+}
+
+function detailTierBtn(t: 'best' | 'high' | 'medium', active: boolean, label: string): string {
+  const palette = {
+    best:   { on: 'bg-amber-100 text-amber-700 hover:bg-amber-200',       off: 'bg-amia-50 text-amia-500 border border-amia-200 hover:bg-amber-50' },
+    high:   { on: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200', off: 'bg-amia-50 text-amia-500 border border-amia-200 hover:bg-emerald-50' },
+    medium: { on: 'bg-sky-100 text-sky-700 hover:bg-sky-200',             off: 'bg-amia-50 text-amia-500 border border-amia-200 hover:bg-sky-50' },
+  }[t];
+  const cls = active ? palette.on : palette.off;
+  return `<button class="detail-tier-btn inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${cls}" data-tier="${t}" data-active="${active}">${label}</button>`;
 }
 
 function workLocationText(loc: 'milan' | 'remote' | null): string {

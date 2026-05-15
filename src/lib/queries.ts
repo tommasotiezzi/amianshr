@@ -154,7 +154,7 @@ export interface ApplicationRow extends Pick<
   | 'pre_quiz_score' | 'pre_quiz_max_score' | 'pre_quiz_completed_at' | 'pre_quiz_over_time'
   | 'post_quiz_score' | 'post_quiz_max_score' | 'post_quiz_completed_at' | 'post_quiz_over_time'
   | 'att_quiz_completed_at' | 'composite_score'
-  | 'screened' | 'standby'
+  | 'screened' | 'standby' | 'tier'
 > {
   candidate: Pick<Candidate, 'first_name' | 'last_name' | 'email' | 'work_location'>;
   position: Pick<Position, 'id' | 'title' | 'department'>;
@@ -170,7 +170,7 @@ export async function fetchApplications(
       pre_quiz_score, pre_quiz_max_score, pre_quiz_completed_at, pre_quiz_over_time,
       post_quiz_score, post_quiz_max_score, post_quiz_completed_at, post_quiz_over_time,
       att_quiz_completed_at, composite_score,
-      screened, standby,
+      screened, standby, tier,
       candidate:candidates(first_name, last_name, email, work_location),
       position:positions(id, title, department)
     `)
@@ -225,6 +225,33 @@ export async function bulkUpdateApplicationStatus(
   const { error } = await supabase
     .from('applications')
     .update({ status })
+    .in('id', applicationIds);
+  if (error) return fail(error.message);
+  return ok(true);
+}
+
+/** Set the manual tier rating for one application. Pass null to clear. */
+export async function updateApplicationTier(
+  applicationId: string,
+  tier: 'best' | 'high' | 'medium' | null,
+): Promise<Result<true>> {
+  const { error } = await supabase
+    .from('applications')
+    .update({ tier })
+    .eq('id', applicationId);
+  if (error) return fail(error.message);
+  return ok(true);
+}
+
+/** Bulk-set tier for many applications. */
+export async function bulkUpdateApplicationTier(
+  applicationIds: string[],
+  tier: 'best' | 'high' | 'medium' | null,
+): Promise<Result<true>> {
+  if (applicationIds.length === 0) return ok(true);
+  const { error } = await supabase
+    .from('applications')
+    .update({ tier })
     .in('id', applicationIds);
   if (error) return fail(error.message);
   return ok(true);

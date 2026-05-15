@@ -181,6 +181,8 @@ export interface Application {
   screened: boolean;
   /** Interesting but on hold (e.g. ambiguous fit, second-tier). */
   standby: boolean;
+  /** Manual rating, independent from status/screened/standby. */
+  tier: 'best' | 'high' | 'medium' | null;
 
   created_at: string;
   updated_at: string;

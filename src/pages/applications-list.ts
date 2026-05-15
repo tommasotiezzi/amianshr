@@ -24,6 +24,10 @@ import type { ApplicationStatus } from '../lib/database-types';
 type FilterKey = ApplicationStatus | 'all';
 type TestFilter = 'all' | 'none' | 'some' | 'all_done';
 type LocationFilter = 'all' | 'milan' | 'remote';
+type TierFilter = 'all' | 'best' | 'high' | 'medium' | 'none';
+type ScreenedFilter = 'all' | 'yes' | 'no';
+type StandbyFilter = 'all' | 'yes' | 'no';
+type Tier = 'best' | 'high' | 'medium' | null;
 
 // Every sortable column has an _asc and _desc variant.
 // First click convention: numeric/binary/date → desc (best first), text → asc (A→Z).
@@ -35,27 +39,38 @@ type SortKey =
   | 'att_desc'       | 'att_asc'
   | 'screened_desc'  | 'screened_asc'
   | 'standby_desc'   | 'standby_asc'
+  | 'tier_desc'      | 'tier_asc'
   | 'name_asc'       | 'name_desc'
   | 'position_asc'   | 'position_desc'
   | 'location_asc'   | 'location_desc'
   | 'status_asc'     | 'status_desc';
 
-// Which "first click" direction to use for each column (which is the more
-// useful one to land on first).
-type SortColumn = 'date' | 'match' | 'logic' | 'skills' | 'att' | 'screened' | 'standby' | 'name' | 'position' | 'location' | 'status';
+// Which "first click" direction to use for each column.
+type SortColumn = 'date' | 'match' | 'logic' | 'skills' | 'att' | 'screened' | 'standby' | 'tier' | 'name' | 'position' | 'location' | 'status';
 const FIRST_CLICK_DIR: Record<SortColumn, 'asc' | 'desc'> = {
-  date:     'desc',  // newest first
-  match:    'desc',  // highest first
+  date:     'desc',
+  match:    'desc',
   logic:    'desc',
   skills:   'desc',
-  att:      'desc',  // completed first
-  screened: 'desc',  // true first
-  standby:  'desc',  // true first
-  name:     'asc',   // A→Z
+  att:      'desc',
+  screened: 'desc',
+  standby:  'desc',
+  tier:     'desc',  // best first
+  name:     'asc',
   position: 'asc',
   location: 'asc',
   status:   'asc',
 };
+
+// Ranks the manual tier for sorting. Higher = better. null = worst.
+function tierRank(t: Tier): number {
+  switch (t) {
+    case 'best':   return 3;
+    case 'high':   return 2;
+    case 'medium': return 1;
+    default:       return 0;
+  }
+}
 
 function columnFromSort(s: SortKey): SortColumn {
   return s.replace(/_(asc|desc)$/, '') as SortColumn;
@@ -88,6 +103,32 @@ const LOCATION_OPTIONS: { value: LocationFilter; label: string }[] = [
   { value: 'remote', label: 'Remote' },
 ];
 
+const TIER_OPTIONS: { value: TierFilter; label: string }[] = [
+  { value: 'all',    label: 'Tutti i tier' },
+  { value: 'best',   label: '⭐ Best' },
+  { value: 'high',   label: '▲ High' },
+  { value: 'medium', label: '◆ Medium' },
+  { value: 'none',   label: 'Non valutati' },
+];
+
+const SCREENED_OPTIONS: { value: ScreenedFilter; label: string }[] = [
+  { value: 'all', label: 'Screened: tutti' },
+  { value: 'yes', label: '👁 Screened' },
+  { value: 'no',  label: 'Non screened' },
+];
+
+const STANDBY_OPTIONS: { value: StandbyFilter; label: string }[] = [
+  { value: 'all', label: 'Standby: tutti' },
+  { value: 'yes', label: '⏸ In standby' },
+  { value: 'no',  label: 'Non in standby' },
+];
+
+const TIER_LABEL: Record<'best' | 'high' | 'medium', { icon: string; full: string }> = {
+  best:   { icon: '⭐', full: 'Best one' },
+  high:   { icon: '▲', full: 'High potential' },
+  medium: { icon: '◆', full: 'Medium potential' },
+};
+
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: 'date_desc',   label: 'Più recenti' },
   { value: 'date_asc',    label: 'Meno recenti' },
@@ -110,12 +151,18 @@ interface Prefs {
   sort: SortKey;
   testFilter: TestFilter;
   locationFilter: LocationFilter;
+  tierFilter: TierFilter;
+  screenedFilter: ScreenedFilter;
+  standbyFilter: StandbyFilter;
   positionFilter: string;
 }
 const DEFAULT_PREFS: Prefs = {
   sort: 'date_desc',
   testFilter: 'all',
   locationFilter: 'all',
+  tierFilter: 'all',
+  screenedFilter: 'all',
+  standbyFilter: 'all',
   positionFilter: 'all',
 };
 
@@ -203,6 +250,9 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
           ${selectDropdown('position-filter', 'Posizione', [{ value: 'all', label: 'Tutte le posizioni' }, ...positions.map((p) => ({ value: p.id, label: p.title }))], prefs.positionFilter)}
           ${selectDropdown('test-filter',     'Test',      TEST_OPTIONS,     prefs.testFilter)}
           ${selectDropdown('location-filter', 'Location',  LOCATION_OPTIONS, prefs.locationFilter)}
+          ${selectDropdown('tier-filter',     'Tier',      TIER_OPTIONS,     prefs.tierFilter)}
+          ${selectDropdown('screened-filter', 'Screened',  SCREENED_OPTIONS, prefs.screenedFilter)}
+          ${selectDropdown('standby-filter',  'Standby',   STANDBY_OPTIONS,  prefs.standbyFilter)}
           ${selectDropdown('sort-by',         'Ordina',    SORT_OPTIONS,     prefs.sort)}
 
           <div class="relative ml-auto flex-1 max-w-xs min-w-[180px]">
@@ -231,6 +281,13 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
           <select id="bulk-status" class="px-3 py-2 rounded-lg text-xs border border-amia-200 bg-white">
             <option value="">Cambia stato...</option>
             ${STATUS_OPTIONS_FOR_BULK.map((o) => `<option value="${o.value}">→ ${o.label}</option>`).join('')}
+          </select>
+          <select id="bulk-tier" class="px-3 py-2 rounded-lg text-xs border border-amia-200 bg-white">
+            <option value="">Imposta tier...</option>
+            <option value="best">⭐ Best</option>
+            <option value="high">▲ High</option>
+            <option value="medium">◆ Medium</option>
+            <option value="__clear__">Rimuovi tier</option>
           </select>
           <button id="bulk-apply" class="px-3 py-2 rounded-lg text-xs font-medium bg-amia-950 text-white hover:bg-amia-900">
             Applica
@@ -278,6 +335,7 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
               ${sortableHeader('att',      'Att.',      prefs.sort, { align: 'center' })}
               ${sortableHeader('match',    'Match',     prefs.sort, { align: 'center' })}
               ${sortableHeader('status',   'Status',    prefs.sort)}
+              ${sortableHeader('tier',     'Tier',      prefs.sort, { align: 'center' })}
               ${sortableHeader('screened', '👁',        prefs.sort, { align: 'center' })}
               ${sortableHeader('standby',  '⏸',         prefs.sort, { align: 'center' })}
               ${sortableHeader('date',     'Data',      prefs.sort, { align: 'right' })}
@@ -294,7 +352,7 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
     ctx.$$<HTMLElement>('.app-row').forEach((row) => {
       ctx.on(row, 'click', (e: Event) => {
         const t = e.target as HTMLElement;
-        if (t.closest('input, button, label, .flag-toggle, .row-checkbox')) return;
+        if (t.closest('input, button, label, .flag-toggle, .row-checkbox, .tier-pill')) return;
         const id = row.dataset.id;
         if (id) ctx.router.navigate(`/applications/${id}?from=list`);
       });
@@ -315,6 +373,18 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
     }
     if (prefs.locationFilter !== 'all') {
       out = out.filter((a) => a.candidate.work_location === prefs.locationFilter);
+    }
+    if (prefs.tierFilter !== 'all') {
+      out = out.filter((a) => {
+        if (prefs.tierFilter === 'none') return a.tier == null;
+        return a.tier === prefs.tierFilter;
+      });
+    }
+    if (prefs.screenedFilter !== 'all') {
+      out = out.filter((a) => prefs.screenedFilter === 'yes' ? a.screened : !a.screened);
+    }
+    if (prefs.standbyFilter !== 'all') {
+      out = out.filter((a) => prefs.standbyFilter === 'yes' ? a.standby : !a.standby);
     }
     if (prefs.testFilter !== 'all') {
       out = out.filter((a) => {
@@ -372,6 +442,9 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
     bindSelect('position-filter', (v) => { prefs.positionFilter = v; });
     bindSelect('test-filter',     (v) => { prefs.testFilter     = v as TestFilter; });
     bindSelect('location-filter', (v) => { prefs.locationFilter = v as LocationFilter; });
+    bindSelect('tier-filter',     (v) => { prefs.tierFilter     = v as TierFilter; });
+    bindSelect('screened-filter', (v) => { prefs.screenedFilter = v as ScreenedFilter; });
+    bindSelect('standby-filter',  (v) => { prefs.standbyFilter  = v as StandbyFilter; });
     bindSelect('sort-by',         (v) => { prefs.sort           = v as SortKey; });
 
     // Initial bind for reset button (if it's already in the DOM at first render)
@@ -393,23 +466,43 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
     const bulkApply  = ctx.$<HTMLButtonElement>('#bulk-apply');
     const bulkCancel = ctx.$<HTMLButtonElement>('#bulk-cancel');
     const bulkStatus = ctx.$<HTMLSelectElement>('#bulk-status');
+    const bulkTier   = ctx.$<HTMLSelectElement>('#bulk-tier');
     ctx.on(bulkApply, 'click', async () => {
-      if (!bulkStatus || !bulkStatus.value) {
-        showToast('Seleziona uno stato', 'error');
-        return;
-      }
-      const status = bulkStatus.value as ApplicationStatus;
       const ids = Array.from(selected);
       if (ids.length === 0) return;
-      if (!confirm(`Cambiare stato a "${status}" per ${ids.length} candidature?`)) return;
-      const res = await q.bulkUpdateApplicationStatus(ids, status);
-      if (res.error) {
-        showToast('Errore: ' + res.error, 'error');
+      const statusVal = bulkStatus?.value || '';
+      const tierVal   = bulkTier?.value   || '';
+      if (!statusVal && !tierVal) {
+        showToast('Seleziona uno stato o un tier', 'error');
         return;
       }
-      applications = applications.map((a) =>
-        ids.includes(a.id) ? { ...a, status } : a
-      );
+
+      // Confirm dialog summarizes both changes when set
+      const parts: string[] = [];
+      if (statusVal) parts.push(`stato → ${statusVal}`);
+      if (tierVal) {
+        const tierLabel = tierVal === '__clear__' ? 'nessun tier' : tierVal;
+        parts.push(`tier → ${tierLabel}`);
+      }
+      if (!confirm(`Applicare ${parts.join(' e ')} a ${ids.length} candidature?`)) return;
+
+      // Run the two updates sequentially (server-side)
+      if (statusVal) {
+        const status = statusVal as ApplicationStatus;
+        const res = await q.bulkUpdateApplicationStatus(ids, status);
+        if (res.error) { showToast('Errore status: ' + res.error, 'error'); return; }
+        applications = applications.map((a) => ids.includes(a.id) ? { ...a, status } : a);
+      }
+      if (tierVal) {
+        const tier = tierVal === '__clear__' ? null : (tierVal as 'best' | 'high' | 'medium');
+        const res = await q.bulkUpdateApplicationTier(ids, tier);
+        if (res.error) { showToast('Errore tier: ' + res.error, 'error'); return; }
+        applications = applications.map((a) => ids.includes(a.id) ? { ...a, tier } : a);
+      }
+
+      // Reset selects + selection
+      if (bulkStatus) bulkStatus.value = '';
+      if (bulkTier)   bulkTier.value   = '';
       selected.clear();
       showToast(`${ids.length} candidature aggiornate`);
       renderList();
@@ -493,6 +586,33 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
         if (target) target[flag] = next;
       });
     });
+
+    // Tier picker pills — click to set, click the active one to unset.
+    ctx.$$<HTMLButtonElement>('.tier-pill').forEach((btn) => {
+      ctx.on(btn, 'click', async (e: Event) => {
+        e.stopPropagation();
+        const id   = btn.dataset.id!;
+        const t    = btn.dataset.tier! as 'best' | 'high' | 'medium';
+        const isActive = btn.dataset.active === 'true';
+        const nextTier: Tier = isActive ? null : t;
+        // Optimistic: re-render the whole tier cell so the 3 pills sync
+        const target = applications.find((a) => a.id === id);
+        if (!target) return;
+        const prev = target.tier;
+        target.tier = nextTier;
+        const cell = btn.closest('td');
+        if (cell) cell.innerHTML = tierPickerCell(id, nextTier);
+        // Re-bind: the cell's pills are new nodes
+        const res = await q.updateApplicationTier(id, nextTier);
+        if (res.error) {
+          target.tier = prev;
+          if (cell) cell.innerHTML = tierPickerCell(id, prev);
+          showToast('Errore: ' + res.error, 'error');
+        }
+        // Always rebind the pills in this cell after the swap
+        bindRowControls();
+      });
+    });
   }
 
   function updateBulkBar() {
@@ -545,6 +665,9 @@ function sortCompare(a: q.ApplicationRow, b: q.ApplicationRow, sort: SortKey): n
 
     case 'standby':
       return flip * ((b.standby ? 1 : 0) - (a.standby ? 1 : 0));
+
+    case 'tier':
+      return flip * (tierRank(b.tier) - tierRank(a.tier));
 
     case 'name': {
       const an = `${a.candidate.first_name} ${a.candidate.last_name}`;
@@ -617,6 +740,7 @@ function applicationRow(a: q.ApplicationRow): string {
       <td class="px-2 py-3 text-center">${attChip(a.att_quiz_completed_at)}</td>
       <td class="px-2 py-3 text-center">${compositeScoreDisplay(a.composite_score)}</td>
       <td class="px-3 py-3">${applicationStatusBadge(a.status)}</td>
+      <td class="px-2 py-3 text-center">${tierPickerCell(a.id, a.tier)}</td>
       <td class="px-2 py-3 text-center">
         <button class="${flagToggleClasses(a.screened)}" data-id="${a.id}" data-flag="screened" data-value="${a.screened}" title="Screened (portfolio/LinkedIn reviewed)">
           ${a.screened ? '✓' : '○'}
@@ -641,6 +765,28 @@ function flagToggleClasses(active: boolean): string {
       ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
       : 'bg-amia-50 text-amia-300 hover:bg-amia-100 hover:text-amia-500'
   }`;
+}
+
+/** Three small pill buttons per row: ⭐ ▲ ◆. Active = filled. Click to set,
+ *  click the active one to unset. */
+function tierPickerCell(appId: string, tier: Tier): string {
+  return `
+    <div class="inline-flex items-center gap-1 justify-center">
+      ${tierPill(appId, 'best',   tier === 'best',   '⭐')}
+      ${tierPill(appId, 'high',   tier === 'high',   '▲')}
+      ${tierPill(appId, 'medium', tier === 'medium', '◆')}
+    </div>
+  `;
+}
+
+function tierPill(appId: string, t: 'best' | 'high' | 'medium', active: boolean, icon: string): string {
+  const palette = {
+    best:   { on: 'bg-amber-100 text-amber-700 hover:bg-amber-200',         off: 'text-amia-300 hover:text-amber-500 hover:bg-amber-50' },
+    high:   { on: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200',   off: 'text-amia-300 hover:text-emerald-500 hover:bg-emerald-50' },
+    medium: { on: 'bg-sky-100 text-sky-700 hover:bg-sky-200',               off: 'text-amia-300 hover:text-sky-500 hover:bg-sky-50' },
+  }[t];
+  const cls = active ? palette.on : palette.off;
+  return `<button class="tier-pill inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] transition-colors ${cls}" data-id="${appId}" data-tier="${t}" data-active="${active}" title="${TIER_LABEL[t].full}">${icon}</button>`;
 }
 
 function locationBadge(loc: 'milan' | 'remote' | null): string {
@@ -722,6 +868,9 @@ function hasActiveFilters(prefs: Prefs, currentFilter: FilterKey, search: string
     prefs.positionFilter !== DEFAULT_PREFS.positionFilter ||
     prefs.testFilter     !== DEFAULT_PREFS.testFilter ||
     prefs.locationFilter !== DEFAULT_PREFS.locationFilter ||
+    prefs.tierFilter     !== DEFAULT_PREFS.tierFilter ||
+    prefs.screenedFilter !== DEFAULT_PREFS.screenedFilter ||
+    prefs.standbyFilter  !== DEFAULT_PREFS.standbyFilter ||
     prefs.sort           !== DEFAULT_PREFS.sort ||
     currentFilter !== 'applied' ||
     !!search.trim()
