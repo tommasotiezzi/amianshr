@@ -24,7 +24,48 @@ import type { ApplicationStatus } from '../lib/database-types';
 type FilterKey = ApplicationStatus | 'all';
 type TestFilter = 'all' | 'none' | 'some' | 'all_done';
 type LocationFilter = 'all' | 'milan' | 'remote';
-type SortKey = 'date_desc' | 'match_desc' | 'logic_desc' | 'skills_desc' | 'name_asc' | 'name_desc';
+
+// Every sortable column has an _asc and _desc variant.
+// First click convention: numeric/binary/date → desc (best first), text → asc (A→Z).
+type SortKey =
+  | 'date_desc'      | 'date_asc'
+  | 'match_desc'     | 'match_asc'
+  | 'logic_desc'     | 'logic_asc'
+  | 'skills_desc'    | 'skills_asc'
+  | 'att_desc'       | 'att_asc'
+  | 'screened_desc'  | 'screened_asc'
+  | 'standby_desc'   | 'standby_asc'
+  | 'name_asc'       | 'name_desc'
+  | 'position_asc'   | 'position_desc'
+  | 'location_asc'   | 'location_desc'
+  | 'status_asc'     | 'status_desc';
+
+// Which "first click" direction to use for each column (which is the more
+// useful one to land on first).
+type SortColumn = 'date' | 'match' | 'logic' | 'skills' | 'att' | 'screened' | 'standby' | 'name' | 'position' | 'location' | 'status';
+const FIRST_CLICK_DIR: Record<SortColumn, 'asc' | 'desc'> = {
+  date:     'desc',  // newest first
+  match:    'desc',  // highest first
+  logic:    'desc',
+  skills:   'desc',
+  att:      'desc',  // completed first
+  screened: 'desc',  // true first
+  standby:  'desc',  // true first
+  name:     'asc',   // A→Z
+  position: 'asc',
+  location: 'asc',
+  status:   'asc',
+};
+
+function columnFromSort(s: SortKey): SortColumn {
+  return s.replace(/_(asc|desc)$/, '') as SortColumn;
+}
+function dirFromSort(s: SortKey): 'asc' | 'desc' {
+  return s.endsWith('_desc') ? 'desc' : 'asc';
+}
+function buildSort(col: SortColumn, dir: 'asc' | 'desc'): SortKey {
+  return `${col}_${dir}` as SortKey;
+}
 
 const STATUS_FILTERS: { value: FilterKey; label: string }[] = [
   { value: 'applied',   label: 'Candidati' },
@@ -49,6 +90,7 @@ const LOCATION_OPTIONS: { value: LocationFilter; label: string }[] = [
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: 'date_desc',   label: 'Più recenti' },
+  { value: 'date_asc',    label: 'Meno recenti' },
   { value: 'match_desc',  label: 'Match più alto' },
   { value: 'logic_desc',  label: 'Logica più alta' },
   { value: 'skills_desc', label: 'Skills più alti' },
@@ -99,6 +141,30 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
   let searchQuery: string = ctx.query.search ?? '';
   const selected = new Set<string>();
 
+  // ── Reset filters helpers (used across multiple bind callbacks) ──
+  function resetFilters() {
+    prefs = { ...DEFAULT_PREFS };
+    savePrefs(prefs);
+    currentFilter = 'applied';
+    searchQuery = '';
+    renderFull();
+  }
+  function updateResetVisibility() {
+    const btn = ctx.$<HTMLButtonElement>('#reset-filters');
+    const active = hasActiveFilters(prefs, currentFilter, searchQuery);
+    if (active && !btn) {
+      const bar = ctx.container.querySelector('.filter-bar');
+      if (bar) {
+        const html = `<button id="reset-filters" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-amia-500 hover:text-amia-900 hover:bg-amia-50 transition-colors inline-flex items-center gap-1" title="Reset filters">✕ Reset</button>`;
+        bar.insertAdjacentHTML('beforeend', html);
+        const newBtn = ctx.$<HTMLButtonElement>('#reset-filters');
+        ctx.on(newBtn, 'click', resetFilters);
+      }
+    } else if (!active && btn) {
+      btn.remove();
+    }
+  }
+
   ctx.container.innerHTML = loadingShell();
 
   Promise.all([
@@ -133,7 +199,7 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
           ${STATUS_FILTERS.map((f) => statusFilterBtn(f.value, f.label, currentFilter, countForStatus(f.value, applications))).join('')}
         </div>
 
-        <div class="bg-white border border-amia-100 rounded-xl p-3 mb-4 flex items-center gap-3 flex-wrap">
+        <div class="filter-bar bg-white border border-amia-100 rounded-xl p-3 mb-4 flex items-center gap-3 flex-wrap">
           ${selectDropdown('position-filter', 'Posizione', [{ value: 'all', label: 'Tutte le posizioni' }, ...positions.map((p) => ({ value: p.id, label: p.title }))], prefs.positionFilter)}
           ${selectDropdown('test-filter',     'Test',      TEST_OPTIONS,     prefs.testFilter)}
           ${selectDropdown('location-filter', 'Location',  LOCATION_OPTIONS, prefs.locationFilter)}
@@ -147,6 +213,12 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
               class="w-full pl-9 pr-3 py-2 rounded-lg text-xs border border-amia-200
                      text-amia-900 placeholder:text-amia-300" />
           </div>
+
+          ${hasActiveFilters(prefs, currentFilter, searchQuery) ? `
+            <button id="reset-filters" class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-amia-500 hover:text-amia-900 hover:bg-amia-50 transition-colors inline-flex items-center gap-1" title="Reset filters">
+              ✕ Reset
+            </button>
+          ` : ''}
         </div>
 
         <div data-list></div>
@@ -198,24 +270,17 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
               <th class="w-8 pl-4">
                 <input type="checkbox" id="select-all" class="rounded border-amia-300" />
               </th>
-              <th class="text-left text-xs font-medium text-amia-400 px-3 py-3">
-                <button id="sort-name-btn" class="inline-flex items-center gap-1 hover:text-amia-700 transition-colors ${prefs.sort === 'name_asc' || prefs.sort === 'name_desc' ? 'text-amia-900' : ''}">
-                  Candidato
-                  <span class="text-[10px] leading-none">
-                    ${prefs.sort === 'name_asc' ? '▲' : prefs.sort === 'name_desc' ? '▼' : '<span class="text-amia-200">↕</span>'}
-                  </span>
-                </button>
-              </th>
-              <th class="text-left text-xs font-medium text-amia-400 px-3 py-3">Posizione</th>
-              <th class="text-center text-xs font-medium text-amia-400 px-2 py-3">📍</th>
-              <th class="text-center text-xs font-medium text-amia-400 px-2 py-3">Logica</th>
-              <th class="text-center text-xs font-medium text-amia-400 px-2 py-3">Skills</th>
-              <th class="text-center text-xs font-medium text-amia-400 px-2 py-3">Att.</th>
-              <th class="text-center text-xs font-medium text-amia-400 px-2 py-3">Match</th>
-              <th class="text-left text-xs font-medium text-amia-400 px-3 py-3">Status</th>
-              <th class="text-center text-xs font-medium text-amia-400 px-2 py-3" title="Screened">👁</th>
-              <th class="text-center text-xs font-medium text-amia-400 px-2 py-3" title="Standby">⏸</th>
-              <th class="text-right text-xs font-medium text-amia-400 px-3 py-3">Data</th>
+              ${sortableHeader('name',     'Candidato', prefs.sort)}
+              ${sortableHeader('position', 'Posizione', prefs.sort)}
+              ${sortableHeader('location', '📍',        prefs.sort, { align: 'center' })}
+              ${sortableHeader('logic',    'Logica',    prefs.sort, { align: 'center' })}
+              ${sortableHeader('skills',   'Skills',    prefs.sort, { align: 'center' })}
+              ${sortableHeader('att',      'Att.',      prefs.sort, { align: 'center' })}
+              ${sortableHeader('match',    'Match',     prefs.sort, { align: 'center' })}
+              ${sortableHeader('status',   'Status',    prefs.sort)}
+              ${sortableHeader('screened', '👁',        prefs.sort, { align: 'center' })}
+              ${sortableHeader('standby',  '⏸',         prefs.sort, { align: 'center' })}
+              ${sortableHeader('date',     'Data',      prefs.sort, { align: 'right' })}
               <th class="w-8"></th>
             </tr>
           </thead>
@@ -275,33 +340,7 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
       });
     }
 
-    out = [...out].sort((a, b) => {
-      switch (prefs.sort) {
-        case 'match_desc':
-          return (b.composite_score ?? -1) - (a.composite_score ?? -1);
-        case 'logic_desc': {
-          const ap = a.pre_quiz_max_score ? (a.pre_quiz_score ?? 0) / a.pre_quiz_max_score : -1;
-          const bp = b.pre_quiz_max_score ? (b.pre_quiz_score ?? 0) / b.pre_quiz_max_score : -1;
-          return bp - ap;
-        }
-        case 'skills_desc': {
-          const ap = a.post_quiz_max_score ? (a.post_quiz_score ?? 0) / a.post_quiz_max_score : -1;
-          const bp = b.post_quiz_max_score ? (b.post_quiz_score ?? 0) / b.post_quiz_max_score : -1;
-          return bp - ap;
-        }
-        case 'name_asc':
-          return `${a.candidate.first_name} ${a.candidate.last_name}`.localeCompare(
-            `${b.candidate.first_name} ${b.candidate.last_name}`
-          );
-        case 'name_desc':
-          return `${b.candidate.first_name} ${b.candidate.last_name}`.localeCompare(
-            `${a.candidate.first_name} ${a.candidate.last_name}`
-          );
-        case 'date_desc':
-        default:
-          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      }
-    });
+    out = [...out].sort((a, b) => sortCompare(a, b, prefs.sort));
 
     return out;
   }
@@ -316,6 +355,7 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
           b.className = statusFilterClasses(b.dataset.statusFilter === currentFilter);
         });
         renderList();
+        updateResetVisibility();
       });
     });
 
@@ -326,12 +366,16 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
         set(el.value);
         savePrefs(prefs);
         renderList();
+        updateResetVisibility();
       });
     };
     bindSelect('position-filter', (v) => { prefs.positionFilter = v; });
     bindSelect('test-filter',     (v) => { prefs.testFilter     = v as TestFilter; });
     bindSelect('location-filter', (v) => { prefs.locationFilter = v as LocationFilter; });
     bindSelect('sort-by',         (v) => { prefs.sort           = v as SortKey; });
+
+    // Initial bind for reset button (if it's already in the DOM at first render)
+    ctx.on(ctx.$<HTMLButtonElement>('#reset-filters'), 'click', resetFilters);
 
     const searchInput = ctx.$<HTMLInputElement>('#search-input');
     let searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -341,6 +385,7 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
       searchTimer = setTimeout(() => {
         searchQuery = searchInput.value;
         renderList();
+        updateResetVisibility();
       }, 150);
     });
     ctx.onCleanup(() => { if (searchTimer) clearTimeout(searchTimer); });
@@ -378,16 +423,30 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
   }
 
   function bindRowControls() {
-    // Name column header — toggles A→Z / Z→A. Lives in the table header,
-    // so it gets re-rendered with the table on every renderList(). Must be
-    // bound here, not in bindEvents().
-    const nameBtn = ctx.$<HTMLButtonElement>('#sort-name-btn');
-    ctx.on(nameBtn, 'click', () => {
-      prefs.sort = prefs.sort === 'name_asc' ? 'name_desc' : 'name_asc';
-      savePrefs(prefs);
-      const sortDropdown = ctx.$<HTMLSelectElement>('#sort-by');
-      if (sortDropdown) sortDropdown.value = prefs.sort;
-      renderList();
+    // Sortable column headers — every column with a [data-sort-col] button.
+    // Lives inside the table header, re-rendered on every renderList().
+    // Click cycles: not-sorting-this-col → first-click direction → opposite → first → ...
+    ctx.$$<HTMLButtonElement>('[data-sort-col]').forEach((btn) => {
+      ctx.on(btn, 'click', () => {
+        const col = btn.dataset.sortCol as SortColumn;
+        const currentCol = columnFromSort(prefs.sort);
+        let nextSort: SortKey;
+        if (currentCol === col) {
+          const curDir = dirFromSort(prefs.sort);
+          nextSort = buildSort(col, curDir === 'asc' ? 'desc' : 'asc');
+        } else {
+          nextSort = buildSort(col, FIRST_CLICK_DIR[col]);
+        }
+        prefs.sort = nextSort;
+        savePrefs(prefs);
+        const sortDropdown = ctx.$<HTMLSelectElement>('#sort-by');
+        if (sortDropdown) {
+          const matches = SORT_OPTIONS.some((o) => o.value === nextSort);
+          sortDropdown.value = matches ? nextSort : '';
+        }
+        renderList();
+        updateResetVisibility();
+      });
     });
 
     ctx.$$<HTMLInputElement>('.row-checkbox').forEach((cb) => {
@@ -455,6 +514,88 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
 };
 
 // ── HTML helpers ──
+
+/** Compare two applications according to a SortKey. */
+function sortCompare(a: q.ApplicationRow, b: q.ApplicationRow, sort: SortKey): number {
+  const col = columnFromSort(sort);
+  const flip = dirFromSort(sort) === 'asc' ? 1 : -1;
+
+  switch (col) {
+    case 'date':
+      return flip * (new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+    case 'match':
+      return flip * ((b.composite_score ?? -1) - (a.composite_score ?? -1));
+
+    case 'logic': {
+      const ap = a.pre_quiz_max_score  ? (a.pre_quiz_score  ?? 0) / a.pre_quiz_max_score  : -1;
+      const bp = b.pre_quiz_max_score  ? (b.pre_quiz_score  ?? 0) / b.pre_quiz_max_score  : -1;
+      return flip * (bp - ap);
+    }
+    case 'skills': {
+      const ap = a.post_quiz_max_score ? (a.post_quiz_score ?? 0) / a.post_quiz_max_score : -1;
+      const bp = b.post_quiz_max_score ? (b.post_quiz_score ?? 0) / b.post_quiz_max_score : -1;
+      return flip * (bp - ap);
+    }
+    case 'att':
+      return flip * ((b.att_quiz_completed_at ? 1 : 0) - (a.att_quiz_completed_at ? 1 : 0));
+
+    case 'screened':
+      return flip * ((b.screened ? 1 : 0) - (a.screened ? 1 : 0));
+
+    case 'standby':
+      return flip * ((b.standby ? 1 : 0) - (a.standby ? 1 : 0));
+
+    case 'name': {
+      const an = `${a.candidate.first_name} ${a.candidate.last_name}`;
+      const bn = `${b.candidate.first_name} ${b.candidate.last_name}`;
+      const cmp = an.localeCompare(bn);
+      return dirFromSort(sort) === 'asc' ? cmp : -cmp;
+    }
+    case 'position': {
+      const cmp = a.position.title.localeCompare(b.position.title);
+      return dirFromSort(sort) === 'asc' ? cmp : -cmp;
+    }
+    case 'location': {
+      // null last regardless of direction
+      const av = a.candidate.work_location;
+      const bv = b.candidate.work_location;
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      const cmp = av.localeCompare(bv);
+      return dirFromSort(sort) === 'asc' ? cmp : -cmp;
+    }
+    case 'status': {
+      const cmp = a.status.localeCompare(b.status);
+      return dirFromSort(sort) === 'asc' ? cmp : -cmp;
+    }
+
+    default:
+      return 0;
+  }
+}
+
+/** Render a column header with sort affordance.
+ *  Click cycles: neutral → first-click direction → opposite → neutral. */
+function sortableHeader(col: SortColumn, label: string, currentSort: SortKey, opts: { align?: 'left' | 'center' | 'right' } = {}): string {
+  const align = opts.align ?? 'left';
+  const currentCol = columnFromSort(currentSort);
+  const isActive = currentCol === col;
+  const dir = isActive ? dirFromSort(currentSort) : null;
+  const arrow = dir === 'asc' ? '▲' : dir === 'desc' ? '▼' : '<span class="text-amia-200">↕</span>';
+  const activeCls = isActive ? 'text-amia-900' : '';
+  const justify = align === 'center' ? 'justify-center' : align === 'right' ? 'justify-end' : '';
+  const textAlign = align === 'center' ? 'text-center' : align === 'right' ? 'text-right' : 'text-left';
+  return `
+    <th class="${textAlign} text-xs font-medium text-amia-400 px-2 py-3">
+      <button data-sort-col="${col}" class="inline-flex items-center gap-1 ${justify} hover:text-amia-700 transition-colors ${activeCls}">
+        ${label}
+        <span class="text-[10px] leading-none">${arrow}</span>
+      </button>
+    </th>
+  `;
+}
 
 function applicationRow(a: q.ApplicationRow): string {
   return `
@@ -575,3 +716,14 @@ function selectDropdown(id: string, label: string, options: { value: string; lab
 
 function escapeAttr(s: string): string { return s.replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
 function escapeText(s: string): string { return s.replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function hasActiveFilters(prefs: Prefs, currentFilter: FilterKey, search: string): boolean {
+  return (
+    prefs.positionFilter !== DEFAULT_PREFS.positionFilter ||
+    prefs.testFilter     !== DEFAULT_PREFS.testFilter ||
+    prefs.locationFilter !== DEFAULT_PREFS.locationFilter ||
+    prefs.sort           !== DEFAULT_PREFS.sort ||
+    currentFilter !== 'applied' ||
+    !!search.trim()
+  );
+}
