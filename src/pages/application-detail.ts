@@ -43,7 +43,17 @@ interface FullApp {
   att_quiz_responses: QuizResponse[] | null;
   axis_scores: Record<string, { raw: number; match_pct: number }> | null;
   composite_score: number | null;
-  candidate: { id: string; first_name: string; last_name: string; email: string; phone: string | null; linkedin_url: string | null };
+  screened: boolean;
+  standby: boolean;
+  candidate: {
+    id: string;
+    first_name: string;
+    last_name: string;
+    email: string;
+    phone: string | null;
+    linkedin_url: string | null;
+    work_location: 'milan' | 'remote' | null;
+  };
   position: {
     id: string;
     title: string;
@@ -86,7 +96,8 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
       pre_quiz_score, pre_quiz_max_score, pre_quiz_completed_at, pre_quiz_started_at, pre_quiz_over_time, pre_quiz_responses,
       post_quiz_score, post_quiz_max_score, post_quiz_completed_at, post_quiz_started_at, post_quiz_over_time, post_quiz_responses,
       att_quiz_completed_at, att_quiz_responses, axis_scores, composite_score,
-      candidate:candidates(id, first_name, last_name, email, phone, linkedin_url),
+      screened, standby,
+      candidate:candidates(id, first_name, last_name, email, phone, linkedin_url, work_location),
       position:positions(id, title, department, icp_config, app_name, app_color_from, app_color_to, pre_quiz_id, post_quiz_id, att_quiz_id)
     `).eq('id', appId).single(),
     supabase.from('application_notes').select('*').eq('application_id', appId).order('created_at', { ascending: false }),
@@ -142,9 +153,15 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
               </p>
               ${appPillHtml(app.position, 'sm')}
             </div>
-            <div class="flex items-center gap-3 mt-3">
+            <div class="flex items-center gap-3 mt-3 flex-wrap">
               ${applicationStatusBadge(app.status)}
               <span class="text-xs text-amia-400">Candidatura del ${formatDate(app.created_at)}</span>
+              <button id="flag-screened" class="${detailFlagClasses(app.screened)}" data-flag="screened" data-value="${app.screened}" title="Screening pass (portfolio/LinkedIn ok)">
+                ${app.screened ? '✓ Screened' : '○ Screen'}
+              </button>
+              <button id="flag-standby" class="${detailFlagClasses(app.standby)}" data-flag="standby" data-value="${app.standby}" title="On hold / standby">
+                ${app.standby ? '⏸ Standby' : '○ Standby'}
+              </button>
             </div>
           </div>
           ${app.composite_score != null ? `
@@ -194,6 +211,10 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
               <a href="${escapeAttr(app.candidate.linkedin_url)}" target="_blank" rel="noopener" class="text-accent hover:underline">Profilo ↗</a>
             </div>
           ` : ''}
+          <div class="flex items-center gap-2">
+            <span class="text-amia-400 text-xs w-20">Lavora da:</span>
+            <span class="text-amia-700">${workLocationText(app.candidate.work_location)}</span>
+          </div>
           ${cvUrl ? `
             <div class="flex items-center gap-2 pt-2">
               <a href="${escapeAttr(cvUrl)}" target="_blank" rel="noopener"
@@ -580,6 +601,30 @@ export const createApplicationDetailPage: PageFactory = (ctx) => {
       });
     });
 
+    // Flag toggles: screened / standby
+    ['flag-screened', 'flag-standby'].forEach((id) => {
+      const btn = ctx.$<HTMLButtonElement>('#' + id);
+      ctx.on(btn, 'click', () => {
+        if (!app || !btn) return;
+        const flag = btn.dataset.flag as 'screened' | 'standby';
+        const cur  = btn.dataset.value === 'true';
+        const next = !cur;
+        // Optimistic update
+        app[flag] = next;
+        supabase.from('applications').update({ [flag]: next }).eq('id', app.id).then(({ error }) => {
+          if (ctx.signal.aborted) return;
+          if (error) {
+            showToast(`Errore: ${error.message}`, 'error');
+            app![flag] = cur;
+          } else {
+            showToast(next ? `Marcato come ${flag === 'screened' ? 'screened' : 'standby'}` : `Rimosso ${flag === 'screened' ? 'screened' : 'standby'}`);
+          }
+          renderFull();
+          bindEvents();
+        });
+      });
+    });
+
     // Delete application
     ctx.on(ctx.$<HTMLButtonElement>('#delete-app-btn'), 'click', () => {
       if (!app) return;
@@ -701,3 +746,17 @@ function attitudinalCard(completed: string | null): string {
 
 function escapeAttr(s: string): string { return s.replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
 function escapeText(s: string): string { return s.replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function detailFlagClasses(active: boolean): string {
+  return `inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+    active
+      ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+      : 'bg-amia-50 text-amia-500 border border-amia-200 hover:bg-amia-100'
+  }`;
+}
+
+function workLocationText(loc: 'milan' | 'remote' | null): string {
+  if (loc === 'milan')  return '📍 Milano (hybrid)';
+  if (loc === 'remote') return '🌍 Remote';
+  return '<span class="text-amia-300">—</span>';
+}

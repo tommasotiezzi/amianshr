@@ -137,6 +137,8 @@ export interface Candidate {
   email: string;
   phone: string | null;
   linkedin_url: string | null;
+  /** 'milan' (based in Milan, can do hybrid) or 'remote' (remote-only). null = legacy/unknown. */
+  work_location: 'milan' | 'remote' | null;
   created_at: string;
 }
 
@@ -172,6 +174,11 @@ export interface Application {
   // Axis scoring (filled after attitudinal is submitted)
   axis_scores: AxisScores | null;
   composite_score: number | null;
+
+  /** Tommaso has reviewed portfolio/LinkedIn and they're worth considering. */
+  screened: boolean;
+  /** Interesting but on hold (e.g. ambiguous fit, second-tier). */
+  standby: boolean;
 
   created_at: string;
   updated_at: string;
@@ -325,6 +332,7 @@ export interface CandidateInsert {
   email: string;
   phone?: string | null;
   linkedin_url?: string | null;
+  work_location?: 'milan' | 'remote' | null;
 }
 
 export interface ApplicationInsert {

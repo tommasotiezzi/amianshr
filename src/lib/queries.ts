@@ -154,9 +154,10 @@ export interface ApplicationRow extends Pick<
   | 'pre_quiz_score' | 'pre_quiz_max_score' | 'pre_quiz_completed_at' | 'pre_quiz_over_time'
   | 'post_quiz_score' | 'post_quiz_max_score' | 'post_quiz_completed_at' | 'post_quiz_over_time'
   | 'att_quiz_completed_at' | 'composite_score'
+  | 'screened' | 'standby'
 > {
-  candidate: Pick<Candidate, 'first_name' | 'last_name' | 'email'>;
-  position: Pick<Position, 'title' | 'department'>;
+  candidate: Pick<Candidate, 'first_name' | 'last_name' | 'email' | 'work_location'>;
+  position: Pick<Position, 'id' | 'title' | 'department'>;
 }
 
 export async function fetchApplications(
@@ -169,8 +170,9 @@ export async function fetchApplications(
       pre_quiz_score, pre_quiz_max_score, pre_quiz_completed_at, pre_quiz_over_time,
       post_quiz_score, post_quiz_max_score, post_quiz_completed_at, post_quiz_over_time,
       att_quiz_completed_at, composite_score,
-      candidate:candidates(first_name, last_name, email),
-      position:positions(title, department)
+      screened, standby,
+      candidate:candidates(first_name, last_name, email, work_location),
+      position:positions(id, title, department)
     `)
     .order('created_at', { ascending: false });
 
@@ -184,6 +186,48 @@ export async function fetchApplications(
     candidate: Array.isArray(a.candidate) ? a.candidate[0] : a.candidate,
     position: Array.isArray(a.position) ? a.position[0] : a.position,
   })));
+}
+
+/** Lightweight position list for the applications-list filter dropdown. */
+export interface PositionFilterOption { id: string; title: string; }
+export async function fetchPositionsForFilter(
+  opts: QueryOpts = {},
+): Promise<Result<PositionFilterOption[]>> {
+  const { data, error } = await supabase
+    .from('positions')
+    .select('id, title')
+    .order('title', { ascending: true })
+    .abortSignal(opts.signal!);
+  if (error) return fail(error.message);
+  return ok(data ?? []);
+}
+
+/** Toggle the `screened` or `standby` flag for one application. */
+export async function updateApplicationFlag(
+  applicationId: string,
+  flag: 'screened' | 'standby',
+  value: boolean,
+): Promise<Result<true>> {
+  const { error } = await supabase
+    .from('applications')
+    .update({ [flag]: value })
+    .eq('id', applicationId);
+  if (error) return fail(error.message);
+  return ok(true);
+}
+
+/** Bulk update the status of multiple applications. */
+export async function bulkUpdateApplicationStatus(
+  applicationIds: string[],
+  status: ApplicationStatus,
+): Promise<Result<true>> {
+  if (applicationIds.length === 0) return ok(true);
+  const { error } = await supabase
+    .from('applications')
+    .update({ status })
+    .in('id', applicationIds);
+  if (error) return fail(error.message);
+  return ok(true);
 }
 
 export async function fetchApplicationDetail(
