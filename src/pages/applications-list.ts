@@ -333,18 +333,6 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
     bindSelect('location-filter', (v) => { prefs.locationFilter = v as LocationFilter; });
     bindSelect('sort-by',         (v) => { prefs.sort           = v as SortKey; });
 
-    // Name column header — toggles A→Z / Z→A and overrides whatever the dropdown had.
-    // Picking something else from the dropdown takes precedence again.
-    const nameBtn = ctx.$<HTMLButtonElement>('#sort-name-btn');
-    ctx.on(nameBtn, 'click', () => {
-      prefs.sort = prefs.sort === 'name_asc' ? 'name_desc' : 'name_asc';
-      savePrefs(prefs);
-      // Sync the dropdown so it shows the right state
-      const sortDropdown = ctx.$<HTMLSelectElement>('#sort-by');
-      if (sortDropdown) sortDropdown.value = prefs.sort;
-      renderList();
-    });
-
     const searchInput = ctx.$<HTMLInputElement>('#search-input');
     let searchTimer: ReturnType<typeof setTimeout> | null = null;
     ctx.on(searchInput, 'input', () => {
@@ -390,6 +378,18 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
   }
 
   function bindRowControls() {
+    // Name column header — toggles A→Z / Z→A. Lives in the table header,
+    // so it gets re-rendered with the table on every renderList(). Must be
+    // bound here, not in bindEvents().
+    const nameBtn = ctx.$<HTMLButtonElement>('#sort-name-btn');
+    ctx.on(nameBtn, 'click', () => {
+      prefs.sort = prefs.sort === 'name_asc' ? 'name_desc' : 'name_asc';
+      savePrefs(prefs);
+      const sortDropdown = ctx.$<HTMLSelectElement>('#sort-by');
+      if (sortDropdown) sortDropdown.value = prefs.sort;
+      renderList();
+    });
+
     ctx.$$<HTMLInputElement>('.row-checkbox').forEach((cb) => {
       ctx.on(cb, 'change', () => {
         const id = cb.dataset.id!;
