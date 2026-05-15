@@ -118,6 +118,8 @@ export interface Position {
   app_name: string | null;
   app_color_from: string | null;
   app_color_to: string | null;
+  /** If true, the apply form asks where the candidate works from (Milan / Remote). */
+  requires_in_person: boolean;
   status: PositionStatus;
   pre_quiz_id: string | null;
   post_quiz_id: string | null;
@@ -299,6 +301,12 @@ export interface PositionInsert {
   location: string;
   salary_min?: number | null;
   salary_max?: number | null;
+  stock_options?: string | null;
+  bonus?: string | null;
+  app_name?: string | null;
+  app_color_from?: string | null;
+  app_color_to?: string | null;
+  requires_in_person?: boolean;
   status?: PositionStatus;
   pre_quiz_id?: string | null;
   post_quiz_id?: string | null;

@@ -24,7 +24,7 @@ import type { ApplicationStatus } from '../lib/database-types';
 type FilterKey = ApplicationStatus | 'all';
 type TestFilter = 'all' | 'none' | 'some' | 'all_done';
 type LocationFilter = 'all' | 'milan' | 'remote';
-type SortKey = 'date_desc' | 'match_desc' | 'logic_desc' | 'skills_desc' | 'name_asc';
+type SortKey = 'date_desc' | 'match_desc' | 'logic_desc' | 'skills_desc' | 'name_asc' | 'name_desc';
 
 const STATUS_FILTERS: { value: FilterKey; label: string }[] = [
   { value: 'applied',   label: 'Candidati' },
@@ -53,6 +53,7 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: 'logic_desc',  label: 'Logica più alta' },
   { value: 'skills_desc', label: 'Skills più alti' },
   { value: 'name_asc',    label: 'Nome A→Z' },
+  { value: 'name_desc',   label: 'Nome Z→A' },
 ];
 
 const STATUS_OPTIONS_FOR_BULK: { value: ApplicationStatus; label: string }[] = [
@@ -197,7 +198,14 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
               <th class="w-8 pl-4">
                 <input type="checkbox" id="select-all" class="rounded border-amia-300" />
               </th>
-              <th class="text-left text-xs font-medium text-amia-400 px-3 py-3">Candidato</th>
+              <th class="text-left text-xs font-medium text-amia-400 px-3 py-3">
+                <button id="sort-name-btn" class="inline-flex items-center gap-1 hover:text-amia-700 transition-colors ${prefs.sort === 'name_asc' || prefs.sort === 'name_desc' ? 'text-amia-900' : ''}">
+                  Candidato
+                  <span class="text-[10px] leading-none">
+                    ${prefs.sort === 'name_asc' ? '▲' : prefs.sort === 'name_desc' ? '▼' : '<span class="text-amia-200">↕</span>'}
+                  </span>
+                </button>
+              </th>
               <th class="text-left text-xs font-medium text-amia-400 px-3 py-3">Posizione</th>
               <th class="text-center text-xs font-medium text-amia-400 px-2 py-3">📍</th>
               <th class="text-center text-xs font-medium text-amia-400 px-2 py-3">Logica</th>
@@ -285,6 +293,10 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
           return `${a.candidate.first_name} ${a.candidate.last_name}`.localeCompare(
             `${b.candidate.first_name} ${b.candidate.last_name}`
           );
+        case 'name_desc':
+          return `${b.candidate.first_name} ${b.candidate.last_name}`.localeCompare(
+            `${a.candidate.first_name} ${a.candidate.last_name}`
+          );
         case 'date_desc':
         default:
           return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
@@ -320,6 +332,18 @@ export const createApplicationsListPage: PageFactory = (ctx) => {
     bindSelect('test-filter',     (v) => { prefs.testFilter     = v as TestFilter; });
     bindSelect('location-filter', (v) => { prefs.locationFilter = v as LocationFilter; });
     bindSelect('sort-by',         (v) => { prefs.sort           = v as SortKey; });
+
+    // Name column header — toggles A→Z / Z→A and overrides whatever the dropdown had.
+    // Picking something else from the dropdown takes precedence again.
+    const nameBtn = ctx.$<HTMLButtonElement>('#sort-name-btn');
+    ctx.on(nameBtn, 'click', () => {
+      prefs.sort = prefs.sort === 'name_asc' ? 'name_desc' : 'name_asc';
+      savePrefs(prefs);
+      // Sync the dropdown so it shows the right state
+      const sortDropdown = ctx.$<HTMLSelectElement>('#sort-by');
+      if (sortDropdown) sortDropdown.value = prefs.sort;
+      renderList();
+    });
 
     const searchInput = ctx.$<HTMLInputElement>('#search-input');
     let searchTimer: ReturnType<typeof setTimeout> | null = null;

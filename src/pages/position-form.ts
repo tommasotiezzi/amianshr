@@ -39,6 +39,7 @@ export const createPositionFormPage: PageFactory = (ctx) => {
     location: '', salary_min: null, salary_max: null,
     stock_options: null, bonus: null,
     app_name: null, app_color_from: null, app_color_to: null,
+    requires_in_person: false,
     status: 'draft',
     pre_quiz_id: null, post_quiz_id: null, att_quiz_id: null, icp_config: {},
   };
@@ -127,6 +128,16 @@ export const createPositionFormPage: PageFactory = (ctx) => {
 
           <!-- Location -->
           ${fieldWrap('Sede *', `<input type="text" name="location" required value="${escapeAttr(position.location ?? '')}" placeholder="es. Remoto, Milano" class="${inputCls}" />`)}
+
+          <!-- In-person requirement -->
+          <div class="flex items-start gap-3 px-4 py-3 rounded-xl bg-amia-50 border border-amia-100">
+            <input type="checkbox" id="requires-in-person" name="requires_in_person" ${position.requires_in_person ? 'checked' : ''}
+              class="mt-0.5 rounded border-amia-300 text-amia-950" />
+            <label for="requires-in-person" class="text-sm text-amia-800 cursor-pointer leading-relaxed">
+              <strong>Questa posizione richiede presenza a Milano</strong>
+              <p class="text-xs text-amia-500 mt-0.5">Se attivo, il form di candidatura chiederà al candidato se è basato a Milano o se lavora da remoto. Per posizioni full-remote, lascia disattivato.</p>
+            </label>
+          </div>
 
           <!-- Salary -->
           <div class="grid grid-cols-2 gap-4">
@@ -296,6 +307,7 @@ export const createPositionFormPage: PageFactory = (ctx) => {
       app_name: ((data.get('app_name') as string) || '').trim() || null,
       app_color_from: ((data.get('app_color_from') as string) || '').trim() || null,
       app_color_to: ((data.get('app_color_to') as string) || '').trim() || null,
+      requires_in_person: data.get('requires_in_person') === 'on',
       status: data.get('status') as PositionStatus,
       pre_quiz_id:  (data.get('pre_quiz_id')  as string) || null,
       post_quiz_id: (data.get('post_quiz_id') as string) || null,
